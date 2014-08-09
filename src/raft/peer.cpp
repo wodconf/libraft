@@ -1,12 +1,12 @@
 
 #include "peer.hpp"
-#include "raft/raft_server.hpp"
-#include "raft_log.hpp"
+#include "raft/server.hpp"
+#include "log.hpp"
 #include <abb/base/log.hpp>
 #define MAX_ENTRY_ONCE 200
 namespace raft {
 
-Peer::Peer(RaftServer* svr,
+Peer::Peer(Server* svr,
 		const std::string& name,
 		const std::string& addr)
 :pre_log_index_(0),
@@ -43,7 +43,7 @@ void  Peer::Loop(){
 }
 void Peer::Flush(){
 	uint64_t term;
-	RaftLog::LogEntryArray arr;
+	LogManager::LogEntryArray arr;
 	uint64_t start_index;
 	this->svr_->GetLog()->GetStartInfo(&start_index,NULL);
 	if(start_index > pre_log_index_){

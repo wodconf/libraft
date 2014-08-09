@@ -7,7 +7,7 @@
 #include <string>
 #include "i_message.hpp"
 namespace raft {
-class RaftServer;
+class Server;
 class Commond;
 typedef Commond* (*common_factory_fn)();
 extern void RegisterCommand(const std::string& name,common_factory_fn fn);
@@ -21,7 +21,7 @@ public:
 		return TYPE_NAME;
 	}
 	virtual const char* CommondName() = 0;
-	virtual void Apply(RaftServer*,std::string *save_error,void**ret) = 0;
+	virtual void Apply(Server*,std::string *save_error,void**ret) = 0;
 };
 
 }

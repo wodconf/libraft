@@ -6,7 +6,7 @@ const char* const LogEntry::TYPE_NAME = "LogEntry";
 LogEntry::LogEntry():log_(NULL),index_(0),term_(0),position(0),cmd_(NULL),ev_(NULL){
 
 }
-LogEntry::LogEntry(RaftLog* log,uint64_t index,uint64_t term,Commond*cmd,Event* ev)
+LogEntry::LogEntry(LogManager* log,uint64_t index,uint64_t term,Commond*cmd,Event* ev)
 :log_(log),index_(index),term_(term),cmd_(cmd),ev_(ev),position(0){
 	ev_->Ref();
 }

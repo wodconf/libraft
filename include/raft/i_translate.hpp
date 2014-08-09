@@ -6,12 +6,12 @@
 
 namespace raft{
 
-class RaftServer;
+class Server;
 class Peer;
 class ITranslate{
 public:
 	virtual ~ITranslate(){}
-	virtual bool SendMessage(RaftServer* raft,const std::string& addr,IMessage&req,IMessage*rsp);
+	virtual bool SendMessage(Server* raft,const std::string& addr,IMessage&req,IMessage*rsp);
 };
 
 }

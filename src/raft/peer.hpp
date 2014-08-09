@@ -7,10 +7,10 @@
 #include "append_entries.hpp"
 #include "snapshot.hpp"
 namespace raft {
-class RaftServer;
+class Server;
 class Peer :public abb::RefObject{
 public:
-	Peer(RaftServer* svr,const std::string& name,const std::string& addr);
+	Peer(Server* svr,const std::string& name,const std::string& addr);
 	~Peer();
 	void SetPreLogIndex(uint64_t index){
 		this->pre_log_index_ = index;
@@ -38,7 +38,7 @@ private:
 	void SendAppendEntriesRequest(AppendEntriesRequest&req);
 	void SendSnapshotRecoveryRequest();
 	void SendSnapshotRequest(SnapshotRequest&req);
-	RaftServer* svr_;
+	Server* svr_;
 	abb::Thread thread_;
 	abb::Mutex mtx_;
 	std::string name_;
