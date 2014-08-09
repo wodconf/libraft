@@ -21,7 +21,7 @@ public:
 		return TYPE_NAME;
 	}
 	virtual const char* CommondName() = 0;
-	void Apply(RaftServer*,std::string *save_error,void**ret) = 0;
+	virtual void Apply(RaftServer*,std::string *save_error,void**ret) = 0;
 };
 
 }
