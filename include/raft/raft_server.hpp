@@ -41,14 +41,10 @@ public:
 			IStateMachine* machine);
 	~RaftServer();
 	IMessage* ProcessMessage(IMessage* req,std::string& save_error);
-	/*AppendEntriesResponce* AppendEntries( AppendEntriesRequest* req,std::string& save_error);
-	VoteResponce* Vote(VoteRequest* req,std::string& save_error);
-	SnapshotResponce* RequestSnapshot(SnapshotRequest* req,std::string& save_error);
-	SnapshotRecoveryResponce* RequestSnapshotRecovery(SnapshotRecoveryRequest* req,std::string& save_error);*/
+	void* DealCommond(Commond* cmd,std::string& save_error);
 
 	bool LoadSnapshot();
 	bool TakeSnapshot(std::string& save_error);
-	void* DealCommond(Commond* cmd,std::string& save_error);
 	void OnAppendEntriesResponce(AppendEntriesResponce*);
 	void OnSnapshotRecoveryResponce(SnapshotRecoveryResponce* rsp);
 	bool AddPeer( const std::string&name, const std::string& connectiongString);

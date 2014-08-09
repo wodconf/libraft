@@ -3,7 +3,6 @@
 #define ADCLOUD_RAFT_LOG_HPP_
 #include <abb/base/thread.hpp>
 #include "log_entry.hpp"
-#include "commond.hpp"
 #include <stdint.h>
 #include <stdio.h>
 #include <sys/uio.h>

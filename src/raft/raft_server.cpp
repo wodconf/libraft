@@ -2,7 +2,6 @@
 
 #include "raft_server.hpp"
 #include <abb/base/log.hpp>
-//#include "../common/time.hpp"
 #include "event.hpp"
 #include "join_commond.hpp"
 #include "peer.hpp"

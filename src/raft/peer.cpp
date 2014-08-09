@@ -1,7 +1,6 @@
 
 #include "peer.hpp"
-#include "raft_server.hpp"
-//#include "../common/time.hpp"
+#include "raft/raft_server.hpp"
 #include "raft_log.hpp"
 #include <abb/base/log.hpp>
 #define MAX_ENTRY_ONCE 200
