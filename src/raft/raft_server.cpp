@@ -388,7 +388,7 @@ void RaftServer::Stop(){
 		LOG(DEBUG) << "Raft Is NOt Running" << this->state_;
 		return ;
 	}
-	StopRequest req;
+	StopRequest* req = new StopRequest() ;
 	std::string err;
 	this->send(&req,err);
 }
@@ -405,7 +405,7 @@ void RaftServer::SetState(STATE s) {
 bool RaftServer::ProcessIfStopEvent(Event* ev){
 	if(ev->Request()->TypeName() == StopRequest::TYPE_NAME){
 		this->SetState(STOPED);
-		ev->Request() = NULL;
+		ev->Request();
 		ev->Notify();
 		return true;
 	}
