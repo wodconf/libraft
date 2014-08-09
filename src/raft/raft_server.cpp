@@ -294,7 +294,7 @@ bool RaftServer::ReadCommitIndex(){
 	this->log_->UpdateCommitIndex(index);
 	return true;
 }
-IMessage* ProcessMessage(IMessage* req,std::string& save_error){
+IMessage* RaftServer::ProcessMessage(IMessage* req,std::string& save_error){
 	return static_cast<IMessage*>(this->send(req,save_error));
 }
 void* RaftServer::DealCommond(Commond* cmd,std::string& save_error){
