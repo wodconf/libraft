@@ -8,7 +8,6 @@
 #include <abb/base/thread.hpp>
 #include <abb/base/block_queue.hpp>
 #include <abb/base/thread_pool.hpp>
-#include "append_entries.hpp"
 #include "commond.hpp"
 #include "i_translate.hpp"
 #include "i_state_machine.hpp"
@@ -17,6 +16,7 @@ struct Event;
 class RaftLog;
 class Peer;
 class AppendEntriesRequest;
+class AppendEntriesResponce;
 class Snapshot;
 class SnapshotRecoveryResponce;
 class VoteResponce;
