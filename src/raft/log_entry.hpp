@@ -24,8 +24,8 @@ public:
 	virtual const char* TypeName(){
 		return TYPE_NAME;
 	}
-	virtual bool Encode(abb::Buffer& buf){return true;};
-	virtual bool Decode(abb::Buffer& buf){return true;};
+	virtual bool Encode(abb::Buffer& buf);
+	virtual bool Decode(abb::Buffer& buf);
 };
 
 
