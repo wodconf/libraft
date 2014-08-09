@@ -3,7 +3,7 @@
 #include "raft/raft_server.hpp"
 #include <abb/base/log.hpp>
 #include "event.hpp"
-#include "raft/join_commond.hpp"
+#include "raft/commonds.hpp"
 #include "peer.hpp"
 #include "raft_log.hpp"
 #include <algorithm>
@@ -56,14 +56,18 @@ public:
 	Peer* peer;
 	RaftServer* svr;
 };
+
 class StopRequest:public IMessage{
 public:
-	static const char*const TYPE_NAME = "StopRequest" ;
+	static const char*const TYPE_NAME ;
 public:
 	StopRequest(){};
 	virtual  ~StopRequest(){}
 	virtual const char* TypeName(){return TYPE_NAME;}
 };
+const char*const StopRequest::TYPE_NAME = "StopRequest" ;
+
+
 RaftServer::RaftServer(const std::string& name,
 		const std::string& path,
 		ITranslate* t,
