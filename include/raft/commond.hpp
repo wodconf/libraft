@@ -1,6 +1,6 @@
 
-#ifndef AD_CLOUD_RAFT_COMMOND_HPP_
-#define AD_CLOUD_RAFT_COMMOND_HPP_
+#ifndef __RAFT_COMMOND_HPP__
+#define __RAFT_COMMOND_HPP__
 
 #include <map>
 

@@ -1,12 +1,7 @@
-/*
- * i_message.hpp
- *
- *  Created on: 2014-8-8
- *      Author: wd
- */
 
-#ifndef I_MESSAGE_HPP_
-#define I_MESSAGE_HPP_
+
+#ifndef __RAFT_I_MESSAGE_HPP__
+#define __RAFT_I_MESSAGE_HPP__
 
 
 #include <abb/base/ref_object.hpp>

@@ -1,6 +1,6 @@
 
-#ifndef I_STATE_MACHINE_HPP_
-#define I_STATE_MACHINE_HPP_
+#ifndef __RAFT_I_STATE_MACHINE_HPP__
+#define __RAFT_I_STATE_MACHINE_HPP__
 #include <abb/base/buffer.hpp>
 namespace raft {
 

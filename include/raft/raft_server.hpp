@@ -1,6 +1,6 @@
 
-#ifndef RAFT_SERVER_HPP_
-#define RAFT_SERVER_HPP_
+#ifndef __RAFT_SERVER_HPP__
+#define __RAFT_SERVER_HPP__
 
 #include <stdint.h>
 #include <map>

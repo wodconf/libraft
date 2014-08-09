@@ -1,6 +1,6 @@
 
-#ifndef APPEND_ENTRIES_REQUEST_HPP_
-#define APPEND_ENTRIES_REQUEST_HPP_
+#ifndef __RAFT_APPEND_ENTRIES_REQUEST_HPP__
+#define __RAFT_APPEND_ENTRIES_REQUEST_HPP__
 
 #include <vector>
 #include "raft/i_message.hpp"

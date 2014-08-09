@@ -1,6 +1,6 @@
 
-#ifndef ADCLOUD_RAFT_I_TRANSLATE_HPP_
-#define ADCLOUD_RAFT_I_TRANSLATE_HPP_
+#ifndef __RAFT_I_TRANSLATE_HPP__
+#define __RAFT_I_TRANSLATE_HPP__
 
 #include "i_message.hpp"
 
