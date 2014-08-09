@@ -390,7 +390,7 @@ void RaftServer::Stop(){
 	}
 	StopRequest* req = new StopRequest() ;
 	std::string err;
-	this->send(&req,err);
+	this->send(req,err);
 }
 void RaftServer::SetState(STATE s) {
 	abb::Mutex::Locker l(mtx_);
