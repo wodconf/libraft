@@ -1,5 +1,6 @@
 
 #include "append_entries.hpp"
+#include "log_entry.hpp"
 #include <cassert>
 namespace raft {
 const char* const AppendEntriesRequest::TYPE_NAME = "AppendEntriesRequest";
