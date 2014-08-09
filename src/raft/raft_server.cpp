@@ -3,7 +3,7 @@
 #include "raft/raft_server.hpp"
 #include <abb/base/log.hpp>
 #include "event.hpp"
-#include "join_commond.hpp"
+#include "raft/join_commond.hpp"
 #include "peer.hpp"
 #include "raft_log.hpp"
 #include <algorithm>
@@ -399,17 +399,17 @@ void RaftServer::SetState(STATE s) {
 
 }
 bool RaftServer::ProcessIfStopEvent(Event* ev){
-	if(ev->req->TypeName() == StopRequest::TYPE_NAME){
+	if(ev->Request()->TypeName() == StopRequest::TYPE_NAME){
 		this->SetState(STOPED);
-		ev->req = NULL;
-		ev->notify_.Notify();
+		ev->Request() = NULL;
+		ev->Notify();
 		return true;
 	}
 	return false;
 }
 bool RaftServer::ProcessIfSnapshotRequest(Event* ev){
-	if( ev->req->TypeName() == SnapshotRequest::TYPE_NAME ){
-		SnapshotRequest* req = static_cast<SnapshotRequest*>(ev->req);
+	if( ev->Request()->TypeName() == SnapshotRequest::TYPE_NAME ){
+		SnapshotRequest* req = static_cast<SnapshotRequest*>(ev->Request());
 		LogEntry* entry = this->log_->GetLogEntry(req->LastIndex);
 		if(entry && entry->term_ == req->LastTerm){
 			ev->rsp = new SnapshotResponce(false);
@@ -417,61 +417,61 @@ bool RaftServer::ProcessIfSnapshotRequest(Event* ev){
 			this->SetState(SNAPSHOT);
 			ev->rsp = new SnapshotResponce(true);
 		}
-		ev->notify_.Notify();
+		ev->Notify();
 		return true;
 	}
 	return false;
 }
 bool RaftServer::ProcessIfAppendEntriesRequest(Event* ev,bool* bupdate){
-	if( ev->req->TypeName() == AppendEntriesRequest::TYPE_NAME ){
-		ev->rsp = this->ProcessAppendEntriesRequest(static_cast<AppendEntriesRequest*>(ev->req),ev->err,bupdate);
-		ev->notify_.Notify();
+	if( ev->Request()->TypeName() == AppendEntriesRequest::TYPE_NAME ){
+		ev->rsp = this->ProcessAppendEntriesRequest(static_cast<AppendEntriesRequest*>(ev->Request()),ev->err,bupdate);
+		ev->Notify();
 		return true;
 	}
 	return false;
 }
 bool RaftServer::ProcessIfAppendEntriesResponce(Event* ev){
-	if(ev->req->TypeName() == AppendEntriesResponce::TYPE_NAME){
-		this->ProcessAppendEntriesResponce(static_cast<AppendEntriesResponce*>(ev->req));
+	if(ev->Request()->TypeName() == AppendEntriesResponce::TYPE_NAME){
+		this->ProcessAppendEntriesResponce(static_cast<AppendEntriesResponce*>(ev->Request()));
 		return true;
 	}
 	return false;
 }
 bool RaftServer::ProcessIfSnapshotRecoveryRequest(Event* ev){
-	if(ev->req->TypeName() == SnapshotRecoveryRequest::TYPE_NAME){
-		ev->rsp = this->ProcessSnapshotRecoveryRequest(static_cast<SnapshotRecoveryRequest*>(ev->req),ev->err);
-		ev->notify_.Notify();
+	if(ev->Request()->TypeName() == SnapshotRecoveryRequest::TYPE_NAME){
+		ev->rsp = this->ProcessSnapshotRecoveryRequest(static_cast<SnapshotRecoveryRequest*>(ev->Request()),ev->err);
+		ev->Notify();
 		return true;
 	}
 	return false;
 }
 bool RaftServer::ProcessIfSnapshotRecoveryResponce(Event* ev){
-	if(ev->req->TypeName() == SnapshotRecoveryResponce::TYPE_NAME){
-		this->ProcessSnapshotRecoveryResponce(static_cast<SnapshotRecoveryResponce*>(ev->req));
+	if(ev->Request()->TypeName() == SnapshotRecoveryResponce::TYPE_NAME){
+		this->ProcessSnapshotRecoveryResponce(static_cast<SnapshotRecoveryResponce*>(ev->Request()));
 		return true;
 	}
 	return false;
 }
 bool RaftServer::ProcessIfVoteRequest(Event* ev,bool* bupdate){
-	if(ev->req->TypeName() == VoteRequest::TYPE_NAME){
-		ev->rsp = this->ProcessVoteRequest(static_cast<VoteRequest*>(ev->req),ev->err,bupdate);
-		ev->notify_.Notify();
+	if(ev->Request()->TypeName() == VoteRequest::TYPE_NAME){
+		ev->rsp = this->ProcessVoteRequest(static_cast<VoteRequest*>(ev->Request()),ev->err,bupdate);
+		ev->Notify();
 		return true;
 	}
 	return false;
 }
 bool RaftServer::ProcessIfJoinCmd(Event* ev){
-	if(ev->req->TypeName() == Commond::TYPE_NAME){
-		Commond* cmd = static_cast<Commond*>(ev->req);
+	if(ev->Request()->TypeName() == Commond::TYPE_NAME){
+		Commond* cmd = static_cast<Commond*>(ev->Request());
 		if(cmd->CommondName() == JoinCommond::CMD_NAME){
-			JoinCommond* cmd = static_cast<JoinCommond*>( ev->req);
+			JoinCommond* cmd = static_cast<JoinCommond*>( ev->Request());
 			if(this->log_->GetCurrentIndex() == 0 && cmd->NodeName() == this->name_){
 				LOG(DEBUG) << "selfjoin and promote to leader";
 				this->SetState(LEADER);
-				this->ProcessCommond(static_cast<Commond*>(ev->req),ev);
+				this->ProcessCommond(static_cast<Commond*>(ev->Request()),ev);
 			}else{
 				ev->err = "NotLeaderError";
-				ev->notify_.Notify();
+				ev->Notify();
 			}
 			return true;
 		}
@@ -479,8 +479,8 @@ bool RaftServer::ProcessIfJoinCmd(Event* ev){
 	return false;
 }
 bool RaftServer::ProcessIfVoteResponce(Event* ev,int*vote){
-	if(ev->req->TypeName() == VoteResponce::TYPE_NAME){
-		VoteResponce* rsp = static_cast<VoteResponce*>(ev->req);
+	if(ev->Request()->TypeName() == VoteResponce::TYPE_NAME){
+		VoteResponce* rsp = static_cast<VoteResponce*>(ev->Request());
 		LOG(DEBUG) << "ProcessVoteResponce" << rsp->VoteGranted;
 		if(this->cur_term_ != rsp->snd_term){
 			LOG(WARN) << "responce.pre.vote";
@@ -502,8 +502,8 @@ bool RaftServer::ProcessIfVoteResponce(Event* ev,int*vote){
 }
 
 bool RaftServer::ProcessIfCmd(Event*ev){
-	if(ev->req->TypeName() == Commond::TYPE_NAME){
-		this->ProcessCommond(static_cast<Commond*>(ev->req),ev);
+	if(ev->Request()->TypeName() == Commond::TYPE_NAME){
+		this->ProcessCommond(static_cast<Commond*>(ev->Request()),ev);
 		return true;
 	}
 	return false;
@@ -529,17 +529,17 @@ void RaftServer::Loop(){
 	this->SetState(SNAPSHOT);
 	while(this->State() == SNAPSHOT){
 		Event* ev = this->sa_chan_.Poll();
-		if(!ev || !ev->req){
+		if(!ev || !ev->Request()){
 			continue;
 		}
-		LOG(TRACE) << "SnapshotLoop process event:" << ev->req->TypeName();
+		LOG(TRACE) << "SnapshotLoop process event:" << ev->Request()->TypeName();
 		if(!ProcessIfStopEvent(ev)){
 			if(!ProcessIfAppendEntriesRequest(ev,NULL)){
 				if(!ProcessIfSnapshotRecoveryRequest(ev)){
 					if(!ProcessIfVoteRequest(ev,NULL)){
-						LOG(WARN) << "SnapshotLoop unknow commond" << ev->req->TypeName();
+						LOG(WARN) << "SnapshotLoop unknow commond" << ev->Request()->TypeName();
 						ev->err = "NOTLEADERERROR";
-						ev->notify_.Notify();
+						ev->Notify();
 					}
 				}
 			}
@@ -558,18 +558,18 @@ void RaftServer::LeaderLoop(){
 	}
 	while(this->State() == LEADER){
 		Event* ev = this->sa_chan_.Poll();
-		if(!ev || !ev->req){
+		if(!ev || !ev->Request()){
 			continue;
 		}
-		LOG(TRACE) << "LeaderLoop process event:" << ev->req->TypeName();
+		LOG(TRACE) << "LeaderLoop process event:" << ev->Request()->TypeName();
 		if(!ProcessIfStopEvent(ev)){
 			if(!ProcessIfAppendEntriesRequest(ev,NULL)){
 				if(!ProcessIfAppendEntriesResponce(ev)){
 					if(!ProcessIfVoteRequest(ev,NULL)){
 						if(!ProcessIfCmd(ev)){
-							LOG(WARN) << "LeaderLoop unknow commond" << ev->req->TypeName();
+							LOG(WARN) << "LeaderLoop unknow commond" << ev->Request()->TypeName();
 							ev->err = "NOTLEADERERROR";
-							ev->notify_.Notify();
+							ev->Notify();
 						}
 					}
 				}
@@ -597,20 +597,20 @@ void RaftServer::FollowerLoop(){
 				bupdate = true;
 			}
 		}else{
-			if(!ev || !ev->req){
+			if(!ev || !ev->Request()){
 				LOG(DEBUG) << "EMPTY";
 				continue;
 			}
-			LOG(TRACE) << "FollowerLoop process event:" << ev->req->TypeName();
+			LOG(TRACE) << "FollowerLoop process event:" << ev->Request()->TypeName();
 			if(!ProcessIfStopEvent(ev)){
 				if(!ProcessIfAppendEntriesRequest(ev,&bupdate)){
 					if(!ProcessIfAppendEntriesResponce(ev)){
 						if(!ProcessIfVoteRequest(ev,&bupdate)){
 							if(!ProcessIfSnapshotRequest(ev)){
 								if(!ProcessIfJoinCmd(ev)){
-									LOG(WARN) << "FLOOWER NOT DEAL THIS " <<ev->req->TypeName();
+									LOG(WARN) << "FLOOWER NOT DEAL THIS " <<ev->Request()->TypeName();
 									ev->err = "NOTLEADERERROR";
-									ev->notify_.Notify();
+									ev->Notify();
 								}
 							}
 						}
@@ -659,15 +659,15 @@ void RaftServer::CandidateLoop(){
 			if( !this->sa_chan_.PollTimeout(timeout,&ev) ){
 				break;
 			}else{
-				if(ev  && ev->req){
-					LOG(TRACE) << "CandidateLoop process event:" << ev->req->TypeName();
+				if(ev  && ev->Request()){
+					LOG(TRACE) << "CandidateLoop process event:" << ev->Request()->TypeName();
 					if(!ProcessIfStopEvent(ev)){
 						if(!ProcessIfAppendEntriesRequest(ev,NULL)){
 							if(!ProcessIfVoteRequest(ev,NULL)){
 								if(!ProcessIfVoteResponce(ev,&votesGranted)){
-									LOG(WARN) << "CANDIDATE NOT DEAL THIS " << ev->req->TypeName();
+									LOG(WARN) << "CANDIDATE NOT DEAL THIS " << ev->Request()->TypeName();
 									ev->err = "NOTLEADERERROR";
-									ev->notify_.Notify();
+									ev->Notify();
 								}
 							}
 						}
@@ -777,11 +777,11 @@ void RaftServer::ProcessCommond(Commond* req,Event* ev){
 	LogEntry* ent = log_->CreateEntry(this->cur_term_,req,ev);
 	if(!ent){
 		ev->err = "server.command.log.entry.error:creatfail";
-		ev->notify_.Notify();
+		ev->Notify();
 	}
 	if(!this->log_->AppendEntry(ent,&ev->err)){
 		LOG(DEBUG) << "server.command.process" << "AppendEntry fail";
-		ev->notify_.Notify();
+		ev->Notify();
 		ent->UnRef();
 	}
 	this->sync_map_[this->name_] = true;

@@ -21,7 +21,7 @@ struct Event:public abb::RefObject {
 	void Notify(){
 		notify_.Notify();
 	}
-	IMessage* GetRequest(){return req;}
+	IMessage* Request(){return req;}
 	void* rsp;
 	std::string err;
 private:
