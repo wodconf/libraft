@@ -12,7 +12,7 @@ LogEntry::LogEntry(RaftLog* log,uint64_t index,uint64_t term,Commond*cmd,Event* 
 }
 
 LogEntry::~LogEntry() {
-	if(ev_)ev_->notify_.Notify();
+	if(ev_)ev_->Notify();
 	if(ev_)ev_->UnRef();
 }
 bool LogEntry::Encode(abb::Buffer& buf){
