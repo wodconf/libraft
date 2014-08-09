@@ -75,7 +75,6 @@ bool Snapshot::Save(){
 				continue;
 			}else{
 				LOG(WARN) << "Snapshot.save.fail.write: path:" << Path << "err:" << strerror(errno);
-				delete buf;
 				close(fd);
 				return false;
 			}
@@ -83,7 +82,6 @@ bool Snapshot::Save(){
 			break;
 		}
 	}
-	delete buf;
 	fsync(fd);
 	close(fd);
 	return true;
