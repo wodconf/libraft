@@ -1,7 +1,7 @@
 #                                               -*- Autoconf -*-
 # Process this file with autoconf to produce a configure script.
 
-AC_PREREQ([2.69])
+#AC_PREREQ([2.69])
 AC_INIT([libraft], [0.0.0.0], [583032753@qq.com])
 #AC_CONFIG_SRCDIR([src/raft/commond.cpp])
 #AC_CONFIG_HEADERS([config.h])
@@ -16,11 +16,8 @@ AC_PROG_LIBTOOL
 AC_CHECK_HEADERS([fcntl.h stdint.h string.h unistd.h])
 
 # Checks for typedefs, structures, and compiler characteristics.
-AC_CHECK_HEADER_STDBOOL
-AC_TYPE_UINT16_T
-AC_TYPE_UINT32_T
-AC_TYPE_UINT64_T
-AC_TYPE_UINT8_T
+#AC_CHECK_HEADER_STDBOOL
+
 
 # Checks for library functions.
 AC_CHECK_FUNCS([ftruncate mkdir strerror])
