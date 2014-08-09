@@ -14,7 +14,7 @@ extern void RegisterCommand(const std::string& name,common_factory_fn fn);
 extern Commond* NewCommond(const std::string& name);
 class Commond :public IMessage{
 public:
-	static const char* const TYPE_NAME = "Commond";
+	static const char* const TYPE_NAME;
 public:
 	Commond();
 	virtual ~Commond();

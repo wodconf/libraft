@@ -2,7 +2,7 @@
 #include "raft/commond.hpp"
 #include <map>
 namespace raft {
-
+const char* const Commond::TYPE_NAME = "Commond";
 typedef std::map<std::string,common_factory_fn> CommonFactoryMap;
 typedef CommonFactoryMap::iterator ITER;
 static CommonFactoryMap cmd_fac_map_;

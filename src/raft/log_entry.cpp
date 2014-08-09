@@ -2,6 +2,7 @@
 #include "log_entry.hpp"
 #include <cassert>
 namespace raft {
+const char* const LogEntry::TYPE_NAME = "LogEntry";
 LogEntry::LogEntry():log_(NULL),index_(0),term_(0),position(0),cmd_(NULL),ev_(NULL){
 
 }

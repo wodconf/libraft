@@ -221,4 +221,10 @@ bool SnapshotRecoveryResponce::Decode(abb::Buffer &buf){
 	buf >>Success;
 	return true;
 }
+
+
+const char* const SnapshotRecoveryResponce::TYPE_NAME = "SnapshotRecoveryResponce" ;
+const char* const SnapshotRequest::TYPE_NAME = "SnapshotRequest" ;
+const char* const SnapshotResponce::TYPE_NAME = "SnapshotResponce" ;
+const char* const SnapshotRecoveryRequest::TYPE_NAME = "SnapshotRecoveryRequest" ;
 } /* namespace raft */

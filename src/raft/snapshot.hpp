@@ -38,7 +38,7 @@ public:
 };
 class SnapshotRequest:public  IMessage{
 public:
-	static const char* const TYPE_NAME = "SnapshotRequest" ;
+	static const char* const TYPE_NAME ;
 public:
 	SnapshotRequest();
 	SnapshotRequest(const std::string& LeaderName,const Snapshot& snap);
@@ -54,7 +54,7 @@ public:
 };
 class SnapshotResponce:public IMessage{
 public:
-	static const char* const TYPE_NAME = "SnapshotResponce" ;
+	static const char* const TYPE_NAME ;
 public:
 	SnapshotResponce();
 	SnapshotResponce(bool suc);
@@ -68,7 +68,7 @@ public:
 };
 class SnapshotRecoveryRequest :public IMessage{
 public:
-	static const char* const TYPE_NAME = "SnapshotRecoveryRequest" ;
+	static const char* const TYPE_NAME ;
 public:
 	SnapshotRecoveryRequest();
 	SnapshotRecoveryRequest(const std::string& LeaderName,Snapshot& snap);
@@ -87,7 +87,7 @@ public:
 
 class SnapshotRecoveryResponce:public IMessage {
 public:
-	static const char* const TYPE_NAME = "SnapshotRecoveryResponce" ;
+	static const char* const TYPE_NAME ;
 public:
 	SnapshotRecoveryResponce();
 	SnapshotRecoveryResponce(uint64_t Term,bool Success,uint64_t CommitIndex);

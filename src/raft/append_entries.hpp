@@ -9,7 +9,7 @@ namespace raft {
 class LogEntry;
 class AppendEntriesRequest:public IMessage{
 public:
-	static const char* const TYPE_NAME = "AppendEntriesRequest";
+	static const char* const TYPE_NAME ;
 public:
 	typedef std::vector<LogEntry*> LogEntryArray;
 	AppendEntriesRequest();
@@ -40,7 +40,7 @@ public:
 
 class AppendEntriesResponce:public IMessage {
 public:
-	static const char* const TYPE_NAME = "AppendEntriesResponce";
+	static const char* const TYPE_NAME;
 public:
 	AppendEntriesResponce();
 	AppendEntriesResponce(uint64_t Term,uint64_t Index,bool Success,uint64_t CommitIndex);
