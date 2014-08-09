@@ -16,8 +16,7 @@ class Commond :public IMessage{
 public:
 	static const char* const TYPE_NAME;
 public:
-	Commond();
-	virtual ~Commond();
+	virtual ~Commond(){}
 	virtual const char* TypeName(){
 		return TYPE_NAME;
 	}
