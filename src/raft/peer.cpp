@@ -86,7 +86,7 @@ VoteResponce* Peer::SendVoteRequest(VoteRequest&req){
 }
 void Peer::SendSnapshotRequest(SnapshotRequest&req){
 	LOG(DEBUG)<< "peer.snap.send: "<<this->name_;
-	SnapshotResponce* rsp = new VoteResponce();
+	SnapshotResponce* rsp = new SnapshotResponce();
 	if( ! this->svr_->Transporter()->SendMessage(svr_,this->addr_,req,rsp) ){
 		rsp->UnRef();
 		rsp = NULL;
