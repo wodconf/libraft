@@ -10,7 +10,7 @@ namespace raft {
 class RaftLog;
 class LogEntry :public IMessage{
 public:
-	static const char* const TYPE_NAME = "LogEntry";
+	static const char* const TYPE_NAME;
 public:
 	LogEntry();
 	LogEntry(RaftLog* log,uint64_t index,uint64_t term,Commond*cmd,Event* ev);
