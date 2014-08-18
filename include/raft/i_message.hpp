@@ -8,6 +8,7 @@
 #include <abb/base/buffer.hpp>
 
 namespace raft{
+
 class IMessage:public abb::RefObject{
 public:
 	virtual ~IMessage(){}
@@ -15,6 +16,7 @@ public:
 	virtual bool Encode(abb::Buffer& buf){return true;};
 	virtual bool Decode(abb::Buffer& buf){return true;};
 };
+
 }
 
 

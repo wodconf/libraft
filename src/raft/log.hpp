@@ -9,11 +9,11 @@
 #include <vector>
 namespace raft {
 class LogEntry;
-class Server;
+class IServer;
 class LogManager {
 public:
 	typedef std::vector<LogEntry*> LogEntryArray;
-	LogManager(Server* svr);
+	LogManager(IServer* svr);
 	~LogManager();
 	bool Open(const std::string& path);
 	void Close();
@@ -22,7 +22,7 @@ public:
 		abb::Mutex::Locker l(mtx_);
 		return commit_index_;
 	}
-	LogEntry* CreateEntry(uint64_t term,Commond* cmd,Event* ev);
+	LogEntry* CreateEntry(uint64_t term,Commond* cmd,EventBase* ev);
 	bool AppendEntry(LogEntry* entry,std::string* save_err);
 	bool AppendEntries(LogEntryArray entries,std::string* save_err);
 	bool GetEntriesAfter(int max,uint64_t index,LogEntryArray* arr,uint64_t* term);
@@ -58,14 +58,16 @@ private:
 		return log->Reader(iov,iovcnt);
 	}
 	int Reader(const struct iovec *iov, int iovcnt);
-	int err_;
-	int fd_;
-	std::string path_;
+	
 	abb::Mutex mtx_;
+	IServer* svr_;
+	uint64_t commit_index_;//
 	uint64_t start_index_;
 	uint64_t start_term_;
-	uint64_t commit_index_;//
-	Server* svr_;
+	int fd_;
+	int err_;
+	std::string path_;
+	
 	LogEntryArray log_entry_arr_;
 };
 

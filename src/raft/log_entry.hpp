@@ -13,19 +13,21 @@ public:
 	static const char* const TYPE_NAME;
 public:
 	LogEntry();
-	LogEntry(LogManager* log,uint64_t index,uint64_t term,Commond*cmd,Event* ev);
+	LogEntry(LogManager* log,uint64_t index,uint64_t term,Commond*cmd,EventBase* ev);
 	~LogEntry();
-	LogManager* log_;
-	uint64_t index_;
-	uint64_t term_;
-	Commond* cmd_;
-	Event* ev_;
-	int position;
 	virtual const char* TypeName(){
 		return TYPE_NAME;
 	}
 	virtual bool Encode(abb::Buffer& buf);
 	virtual bool Decode(abb::Buffer& buf);
+public:
+	LogManager* log_;
+	uint64_t index_;
+	uint64_t term_;
+	int position;
+	Commond* cmd_;
+	EventBase* ev_;
+	abb::Buffer cmd_buf;
 };
 
 

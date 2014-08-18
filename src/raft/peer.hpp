@@ -20,6 +20,7 @@ public:
 		}
 	void StartHeartbead();
 	void StopHeartbead(bool bflush);
+	
 	const std::string& GetName()const{
 		return name_;
 	}
@@ -28,9 +29,12 @@ public:
 	}
 	VoteResponce* SendVoteRequest(VoteRequest&req);
 private:
+	void WaitStop();
 	static void* ThreadMain(void* arg){
 		Peer* p = static_cast<Peer*>(arg);
+		p->Ref();
 		p->Loop();
+		p->UnRef();
 		return NULL;
 	}
 	void Loop();

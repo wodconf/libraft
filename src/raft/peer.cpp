@@ -9,13 +9,13 @@ namespace raft {
 Peer::Peer(Server* svr,
 		const std::string& name,
 		const std::string& addr)
-:pre_log_index_(0),
- svr_(svr),
+:svr_(svr),
  name_(name),
  addr_(addr),
+ pre_log_index_(0),
  bflush_(false),
- bstop_(false),
- pre_times(0){
+ pre_times(0),
+ bstop_(false){
 }
 
 Peer::~Peer() {
@@ -28,15 +28,19 @@ void Peer::StopHeartbead(bool bflush){
 	bflush_ = bflush;
 	bstop_ = true;
 	notify_.Notify();
-	LOG(DEBUG) <<  this->name_ <<"StopHeartbead";
+	LOG(DEBUG) <<  this->name_ <<" .stop.heartbeat";
+	
+}
+void Peer::WaitStop(){
 	thread_.Wait();
+	LOG(DEBUG) <<  this->name_ <<".stop.heartbeat.success";
 }
 void  Peer::Loop(){
-
-	while(!notify_.WaitTimeout(this->svr_->HeartbeatTimeout()) && !bstop_){
-		this->Flush();
+	while(!bstop_){
+		if(!notify_.WaitTimeout(this->svr_->GetConfig().GetHeartBeatTimeout())){
+			this->Flush();
+		}
 	}
-	LOG(DEBUG) <<  this->name_ <<"Loop Exit";
 	if(bflush_){
 		Flush();
 	}
@@ -52,6 +56,7 @@ void Peer::Flush(){
 			LOG(DEBUG) << "peer.snapshot.lastIndex=" << sna->LastIndex << ".lastTerm" << sna->LastTerm;
 			SnapshotRequest req(this->svr_->Name(),*sna);
 			this->SendSnapshotRequest(req);
+			sna->UnRef();
 			return;
 		}
 	}else{
@@ -77,7 +82,8 @@ void Peer::Flush(){
 }
 VoteResponce* Peer::SendVoteRequest(VoteRequest&req){
 	VoteResponce* rsp = new VoteResponce();
-	if( this->svr_->Transporter()->SendMessage(svr_,this->addr_,req,rsp) ){
+	std::string error;
+	if( this->svr_->Transporter()->SendMessage(svr_,this->addr_,req,*rsp,error) ){
 		return rsp;
 	}else{
 		rsp->UnRef();
@@ -87,20 +93,18 @@ VoteResponce* Peer::SendVoteRequest(VoteRequest&req){
 void Peer::SendSnapshotRequest(SnapshotRequest&req){
 	LOG(DEBUG)<< "peer.snap.send: "<<this->name_;
 	SnapshotResponce* rsp = new SnapshotResponce();
-	if( ! this->svr_->Transporter()->SendMessage(svr_,this->addr_,req,rsp) ){
+	std::string error;
+	if( ! this->svr_->Transporter()->SendMessage(svr_,this->addr_,req,*rsp,error) ){
 		rsp->UnRef();
 		rsp = NULL;
 	}
 	if(!rsp){
 		pre_times++;
-		LOG(DEBUG)<< "peer.snap.timeout: " << this->svr_->Name()<< "->" << this->name_;
+		LOG(DEBUG)<< "peer.snap.timeout: " << this->svr_->Name()<< "->" << this->name_ << error;
 		return;
 	}
 	pre_times = 0;
 	LOG(DEBUG)<< "peer.snap.recv: "<<this->name_;
-
-	// If successful, the peer should have been to snapshot state
-	// Send it the snapshot!
 	if(rsp->success){
 		this->SendSnapshotRecoveryRequest();
 	}else{
@@ -110,15 +114,19 @@ void Peer::SendSnapshotRequest(SnapshotRequest&req){
 
 }
 void Peer::SendSnapshotRecoveryRequest(){
-	SnapshotRecoveryRequest req(this->svr_->Name(),*this->svr_->GetSnapshot());
+	Snapshot* sna = this->svr_->GetSnapshot();
+	if(!sna) return;
+	SnapshotRecoveryRequest req(this->svr_->Name(),*sna);
+	sna->UnRef();
 	LOG(DEBUG)<< "peer.snap.recovery.send: "<<this->name_;
 	SnapshotRecoveryResponce* rsp = new SnapshotRecoveryResponce();
-	if( ! this->svr_->Transporter()->SendMessage(svr_,this->addr_,req,rsp) ){
+	std::string error;
+	if( ! this->svr_->Transporter()->SendMessage(svr_,this->addr_,req,*rsp,error) ){
 		rsp->UnRef();
 		rsp = NULL;
 	}
 	if(!rsp){
-		LOG(DEBUG)<< "peer.snap.recovery.timeout: " << this->svr_->Name()<< "->" << this->name_;
+		LOG(DEBUG)<< "peer.snap.recovery.timeout: " << this->svr_->Name()<< "->" << this->name_ << " " << error;
 		return;
 	}
 	if (rsp->Success) {
@@ -135,13 +143,14 @@ void Peer::SendSnapshotRecoveryRequest(){
 void Peer::SendAppendEntriesRequest(AppendEntriesRequest&req){
 	LOG(TRACE)<< "peer.append.entries.send: "<<this->name_;
 	AppendEntriesResponce* rsp = new AppendEntriesResponce();
-	if( ! this->svr_->Transporter()->SendMessage(svr_,this->addr_,req,rsp) ){
+	std::string error;
+	if( ! this->svr_->Transporter()->SendMessage(svr_,this->addr_,req,*rsp,error) ){
 		rsp->UnRef();
 		rsp = NULL;
 	}
 	if(!rsp){
 		pre_times++;
-		LOG(DEBUG)<< "peer.append.timeout: " << this->svr_->Name()<< "->" << this->name_;
+		LOG(TRACE)<< "peer.append.timeout: " << this->svr_->Name()<< "->" << this->name_ << " " << error;
 		return;
 	}
 	pre_times = 0;

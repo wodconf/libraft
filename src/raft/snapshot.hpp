@@ -11,13 +11,14 @@
 #include <string>
 #include <vector>
 #include <abb/base/buffer.hpp>
+#include <abb/base/ref_object.hpp>
 #include "raft/i_message.hpp"
 namespace raft {
 struct PeerInfo{
 	std::string name;
 	std::string addr;
 };
-class Snapshot {
+class Snapshot :public abb::RefObject{
 public:
 	Snapshot();
 	Snapshot(uint64_t LastIndex,

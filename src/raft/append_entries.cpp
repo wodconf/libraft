@@ -54,7 +54,7 @@ bool AppendEntriesRequest::Encode(abb::Buffer &buf){
 	buf.NET_WriteUint64(CommitIndex);
 	buf << LeaderName;
 	buf.NET_WriteUint32(uint32_t(Entries.size()));
-	for(int i=0;i<Entries.size();i++){
+	for(unsigned i=0;i<Entries.size();i++){
 		if(!Entries[i]->Encode(buf)) return false;
 	}
 	return true;
@@ -66,7 +66,7 @@ bool AppendEntriesRequest::Decode(abb::Buffer &buf){
 	CommitIndex = buf.HOST_ReadUint64();
 	buf >> LeaderName;
 	uint32_t size = buf.HOST_ReadUint32();
-	for(int i=0;i<size;i++){
+	for(unsigned i=0;i<size;i++){
 		LogEntry* entry = new LogEntry();
 		if(!entry->Decode(buf)){
 			entry->UnRef();

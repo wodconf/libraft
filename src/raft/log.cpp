@@ -8,7 +8,10 @@
 #include <unistd.h>
 namespace raft {
 
-LogManager::LogManager(Server* svr):svr_(svr),commit_index_(0),start_index_(0),start_term_(0),fd_(-1) ,err_(-1){
+LogManager::LogManager(IServer* svr)
+:svr_(svr),
+commit_index_(0),
+start_index_(0),start_term_(0),fd_(-1) ,err_(-1){
 
 }
 
@@ -52,9 +55,11 @@ bool LogManager::Open(const std::string& path){
 	LOG(DEBUG)<< "log.open.exist " << path;
 	lseek(fd_,0,SEEK_SET);
 	abb::Buffer buf;
-	buf.WriteFromeReader(StaticReader,this);
+	while( buf.WriteFromeReader(StaticReader,this) > 0){
+		;
+	}
 	int position = 0;
-	int size = buf.Size();
+	int size = buf.ReadSize();
 	while(size > 0){
 		LogEntry* entry = new LogEntry();
 		if( ! entry->Decode(buf) ) {
@@ -70,9 +75,9 @@ bool LogManager::Open(const std::string& path){
 				entry->cmd_->Apply(this->svr_,NULL,NULL);
 			}
 		}
-		position += size - buf.Size();
+		position += size - buf.ReadSize();
 		entry->UnRef();
-		size = buf.Size();
+		size = buf.ReadSize();
 	}
 	if(this->log_entry_arr_.size() > 0){
 		LOG(DEBUG) << "open.log.append log index " << this->log_entry_arr_.front()->index_ << ":" <<this->log_entry_arr_.back()->index_ << "  " << this->commit_index_;
@@ -105,7 +110,7 @@ bool LogManager::Compact(uint64_t index,uint64_t term){
 		return true;
 	}
 	if(index < this->InternalGetCurrentIndex()){
-		for(int i=index-start_index_;i<this->log_entry_arr_.size();i++){
+		for(unsigned i=index-start_index_;i<this->log_entry_arr_.size();i++){
 			log_entry_arr_[i]->Ref();
 			arr.push_back(log_entry_arr_[i]);
 		}
@@ -117,12 +122,12 @@ bool LogManager::Compact(uint64_t index,uint64_t term){
 		return false;
 	}
 	fcntl(fd, F_SETFD, FD_CLOEXEC);
-	for(int i=0;i<arr.size();i++){
+	for(unsigned i=0;i<arr.size();i++){
 		if(!WriteEntry(fd,arr[i],false)){
 			close(fd);
 			remove(newpath.c_str());
-			for(int i=0;i<arr.size();i++){
-				arr[i]->UnRef();
+			for(unsigned j=0;j<arr.size();j++){
+				arr[j]->UnRef();
 			}
 			return false;
 		}
@@ -131,7 +136,7 @@ bool LogManager::Compact(uint64_t index,uint64_t term){
 	close(fd_);
 	this->fd_ = fd;
 	rename(newpath.c_str(),path_.c_str());
-	for(int i=0;i<this->log_entry_arr_.size();i++){
+	for(unsigned i=0;i<this->log_entry_arr_.size();i++){
 		log_entry_arr_[i]->UnRef();
 	}
 	this->log_entry_arr_ = arr;
@@ -146,12 +151,11 @@ bool  LogManager::WriteEntry(int fd,LogEntry* entry,bool bsync){
 	abb::Buffer buf;
 	entry->Encode(buf);
 	while(true){
-		int ret = write(fd,(void*)buf.Data(),buf.Size());
+		int ret = write(fd,(void*)buf.ReadPtr(),buf.ReadSize());
 		if(ret < 0 ){
 			if(errno == EINTR){
 				continue;
 			}else{
-				delete buf;
 				return false;
 			}
 		}else{
@@ -159,10 +163,9 @@ bool  LogManager::WriteEntry(int fd,LogEntry* entry,bool bsync){
 		}
 	}
 	if(bsync)fsync(fd);
-	delete buf;
 	return true;
 }
-LogEntry* LogManager::CreateEntry(uint64_t term,Commond* cmd,Event* ev){
+LogEntry* LogManager::CreateEntry(uint64_t term,Commond* cmd,EventBase* ev){
 	LogEntry* entry = new LogEntry(this,GetNextIndex(),term,cmd,ev);
 	return entry;
 }
@@ -186,7 +189,7 @@ bool LogManager::AppendEntry(LogEntry* entry,std::string* save_err){
 }
 bool LogManager::AppendEntries(LogEntryArray entries,std::string* save_err){
 	abb::Mutex::Locker l(mtx_);
-	for(int i=0;i<entries.size();i++){
+	for(unsigned i=0;i<entries.size();i++){
 		LogEntry* entry = entries[i];
 		if(this->log_entry_arr_.size() > 0){
 			LogEntry* last_entry = this->log_entry_arr_.back();
@@ -211,12 +214,12 @@ bool LogManager::AppendEntries(LogEntryArray entries,std::string* save_err){
 bool LogManager::GetEntriesAfter(int max,uint64_t index,LogEntryArray* arr,uint64_t* term){
 	abb::Mutex::Locker l(mtx_);
 	if(index < this->start_index_){
-		LOG(TRACE) << "log.entriesAfter.before: " << index<<  " "<< start_index_;
+		LOG(DEBUG) << "log.entriesAfter.before: " << index<<  " "<< start_index_;
 		*term = 0;
 		return true;
 	}
 	if (index > (log_entry_arr_.size() + start_index_) ) {
-		LOG(TRACE) << "Index is beyond end of log: " << index<<  " "<< log_entry_arr_.size();
+		LOG(DEBUG) << "Index is beyond end of log: " << index<<  " "<< log_entry_arr_.size();
 		return false;
 	}
 	if (index == this->start_index_) {
@@ -226,7 +229,7 @@ bool LogManager::GetEntriesAfter(int max,uint64_t index,LogEntryArray* arr,uint6
 	}
 	int st = index - this->start_index_;
 	*term = this->log_entry_arr_[st-1]->term_;
-	for(;st < this->log_entry_arr_.size() && max > 0;st++,max--){
+	for(;st < (int)this->log_entry_arr_.size() && max > 0;st++,max--){
 		arr->push_back(log_entry_arr_[st]);
 	}
 	return true;
@@ -272,26 +275,39 @@ void LogManager::UpdateCommitIndex(uint64_t index){
 	LOG(DEBUG) <<"update.commit.index "<< index <<":" << this->commit_index_;
 }
 bool LogManager::CommitToIndex(uint64_t index){
-	LOG(TRACE) << "CommitToIndex" << index;
-	abb::Mutex::Locker l(mtx_);
-	if(index > (log_entry_arr_.size() + start_index_)){
-		LOG(DEBUG) << "raft.Log: Commit index" << index << "set back to " << ( log_entry_arr_.size() + start_index_);
-		index = log_entry_arr_.size() + start_index_;
-	}
-	if (index < commit_index_) {
-		LOG(DEBUG) << "raft.Log: Commit index earily :" << index << "commit_index_:" << commit_index_;
-		return true;
-	}
-	for(int i= this->commit_index_+1;i<=index;i++){
-		int e_index = i - 1 - this->start_index_;
-		LogEntry* entry = log_entry_arr_[e_index];
-		this->commit_index_ = entry->index_;
-		if(entry->ev_){
-			entry->cmd_->Apply(this->svr_,&entry->ev_->err,&entry->ev_->rsp);
-			entry->ev_->Notify();
-		}else{
-			entry->cmd_->Apply(this->svr_,NULL,false);
+	LogEntryArray arr;
+	{
+		LOG(TRACE) << "CommitToIndex" << index;
+		abb::Mutex::Locker l(mtx_);
+		if(index > (log_entry_arr_.size() + start_index_)){
+			LOG(DEBUG) << "raft.Log: Commit index" << index << "set back to " << ( log_entry_arr_.size() + start_index_);
+			index = log_entry_arr_.size() + start_index_;
 		}
+		if (index < commit_index_) {
+			LOG(DEBUG) << "raft.Log: Commit index earily :" << index << "commit_index_:" << commit_index_;
+			return true;
+		}
+		for(unsigned i= this->commit_index_+1;i<=index;i++){
+			int e_index = i - 1 - this->start_index_;
+			LogEntry* entry = log_entry_arr_[e_index];
+			this->commit_index_ = entry->index_;
+			entry->Ref();
+			arr.push_back(entry);
+		}
+	}
+	for(unsigned i = 0;i< arr.size();i++){
+		LogEntry* entry = arr[i];
+		if(entry->ev_){
+			IMessage* msg = NULL;
+			std::string error ;
+			entry->cmd_->Apply(this->svr_,&error,&msg);
+			entry->ev_->Notify(msg,error);
+			entry->ev_->UnRef();
+			entry->ev_ = NULL;
+		}else{
+			entry->cmd_->Apply(this->svr_,NULL,NULL);
+		}
+		entry->UnRef();
 	}
 	return true;
 }
@@ -308,13 +324,14 @@ bool LogManager::Truncate(uint64_t index,uint64_t term){
 	}
 	if(index == this->start_index_){
 		lseek(fd_,0, SEEK_SET);
-		int ret = ftruncate(fd_,0);
-		for(int st=0;st < this->log_entry_arr_.size() ;st++){
+		ftruncate(fd_,0);
+		for(unsigned st=0;st < this->log_entry_arr_.size() ;st++){
 			LogEntry* entry = log_entry_arr_[st];
 			if(entry->ev_){
 				if(entry->ev_){
-					entry->ev_->err = "command failed to be committed due to node failure";
-					entry->ev_->notify_.Notify();
+					entry->ev_->Notify(NULL,"command failed to be committed due to node failure");
+					entry->ev_->UnRef();
+					entry->ev_ = NULL;
 				}
 				entry->UnRef();
 			}
@@ -330,14 +347,15 @@ bool LogManager::Truncate(uint64_t index,uint64_t term){
 			}else{
 				int start = index - this->start_index_;
 				LogEntry* entry = this->log_entry_arr_[start];
-				int ret = ftruncate(fd_,entry->position);
+				ftruncate(fd_,entry->position);
 				lseek(fd_,entry->position, SEEK_SET);
-				for(int i=start;i < this->log_entry_arr_.size();i++){
+				for(int i=start;i < (int)this->log_entry_arr_.size();i++){
 					LogEntry* inentry = this->log_entry_arr_[i];
 					if(inentry){
 						if(inentry->ev_){
-							inentry->ev_->err = "command failed to be committed due to node failure";
-							inentry->ev_->notify_.Notify();
+							inentry->ev_->Notify(NULL,"command failed to be committed due to node failure");
+							inentry->ev_->UnRef();
+							inentry->ev_ = NULL;
 						}
 						inentry->UnRef();
 					}

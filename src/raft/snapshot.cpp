@@ -18,6 +18,7 @@ Snapshot::Snapshot(uint64_t LastIndex,
 }
 
 Snapshot::~Snapshot() {
+	
 }
 int Reader(void* arg,const struct iovec *iov, int iovcnt){
 	int ret;
@@ -46,8 +47,8 @@ Snapshot* Snapshot::Load(const std::string& path){
 	}
 	lseek(fd,0,SEEK_SET);
 	abb::Buffer buf;
-	buf.WriteFromeReader(Reader,&fd);
-	if(buf.Size() <= 0){
+	while(buf.WriteFromeReader(Reader,&fd) > 0);
+	if(buf.ReadSize() <= 0){
 		return NULL;
 	}
 	Snapshot* s = new Snapshot();
@@ -69,7 +70,7 @@ bool Snapshot::Save(){
 	abb::Buffer buf;
 	this->Encode(buf);
 	while(true){
-		int ret = write(fd,buf.Data(),buf.Size());
+		int ret = write(fd,buf.ReadPtr(),buf.ReadSize());
 		if(ret < 0){
 			if(errno == EINTR){
 				continue;
@@ -89,10 +90,10 @@ bool Snapshot::Save(){
 void Snapshot::Encode(abb::Buffer &buf){
 	buf.NET_WriteUint64(LastIndex);
 	buf.NET_WriteUint64(LastTerm);
-	buf.NET_WriteUint16(state.Size());
-	buf.Write(state.Data(),state.Size());
+	buf.NET_WriteUint16(state.ReadSize());
+	buf.Write(state.ReadPtr(),state.ReadSize());
 	buf.NET_WriteUint16(Peers.size());
-	for(int i=0;i<Peers.size();i++){
+	for(unsigned i=0;i<Peers.size();i++){
 		buf << Peers[i].name;
 		buf << Peers[i].addr;
 	}
@@ -102,10 +103,10 @@ void Snapshot::Decode(abb::Buffer &buf){
 	LastTerm = buf.HOST_ReadUint64();
 	uint16_t size = buf.HOST_ReadUint16();
 	state.EnoughSize(size);
-	buf.Read(state.WrData(),size);
-	state.GaveWr(size);
+	buf.Read(state.WritePtr(),size);
+	state.GaveWrite(size);
 	uint16_t sz= buf.HOST_ReadUint16();
-	for(int i=0;i<sz;i++){
+	for(unsigned i=0;i<sz;i++){
 		PeerInfo info;
 		buf >> info.name;
 		buf >> info.addr;
@@ -164,7 +165,7 @@ SnapshotRecoveryRequest::SnapshotRecoveryRequest(
 		const std::string& LeaderName,
 		Snapshot& snap)
 :LastIndex(snap.LastIndex),LastTerm(snap.LastTerm),LeaderName(LeaderName),Peers(snap.Peers){
-	state.Write((snap.state.Data()), snap.state.Size());
+	state.Write((snap.state.ReadPtr()), snap.state.ReadSize());
 }
 SnapshotRecoveryRequest::~SnapshotRecoveryRequest(){
 
@@ -172,11 +173,11 @@ SnapshotRecoveryRequest::~SnapshotRecoveryRequest(){
 bool SnapshotRecoveryRequest::Encode(abb::Buffer &buf){
 	buf.NET_WriteUint64(LastIndex);
 	buf.NET_WriteUint64(LastTerm);
-	buf.NET_WriteUint16(state.Size());
-	buf.Write(state.Data(),state.Size());
+	buf.NET_WriteUint16(state.ReadSize());
+	buf.Write(state.ReadPtr(),state.ReadSize());
 	buf << LeaderName;
 	buf.NET_WriteUint16(Peers.size());
-	for(int i=0;i<Peers.size();i++){
+	for(unsigned i=0;i<Peers.size();i++){
 		buf << Peers[i].name;
 		buf << Peers[i].addr;
 	}
@@ -188,12 +189,12 @@ bool SnapshotRecoveryRequest::Decode(abb::Buffer &buf){
 	uint16_t size = buf.HOST_ReadUint16();
 
 	state.EnoughSize(size);
-	buf.Read(state.WrData(),size);
-	state.GaveWr(size);
+	buf.Read(state.WritePtr(),size);
+	state.GaveWrite(size);
 
 	buf >> LeaderName;
 	uint16_t sz= buf.HOST_ReadUint16();
-	for(int i=0;i<sz;i++){
+	for(unsigned i=0;i<sz;i++){
 		PeerInfo info;
 		buf >> info.name;
 		buf >> info.addr;

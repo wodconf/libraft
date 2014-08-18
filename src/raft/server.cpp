@@ -1,9 +1,16 @@
 
 
 #include "raft/server.hpp"
+#include "raft/messages.hpp"
 #include <abb/base/log.hpp>
+#include <abb/http/http_const.hpp>
+#include <abb/http/http_request.hpp>
+#include <abb/http/http_responce.hpp>
+#include <abb/http/http_responce_writer.hpp>
+#include "http_translate.hpp"
 #include "event.hpp"
 #include "raft/commonds.hpp"
+#include "monitor.hpp"
 #include "peer.hpp"
 #include "log.hpp"
 #include <algorithm>
@@ -18,6 +25,25 @@
 #include <sys/time.h>
 #define NumberOfLogEntriesAfterSnapshot 100
 namespace raft {
+static abb::Mutex g_mtx;
+static bool g_init = false;
+static void Init(){
+	abb::Mutex::Locker l(g_mtx);
+	if(!g_init){
+		g_init = true;
+		RegisterCommand(JoinCommond::CMD_NAME,T_CommondCreator<JoinCommond>);
+	}
+	
+}
+
+extern IServer* NewServer(const std::string& name,
+							const std::string& path,
+							const std::string& addr,
+							void* ctx,
+							IStateMachine* machine,const Config& cfg,IFactory* fac){
+	Init();
+	return new Server(name,path,new HttpTranslate(),addr,ctx,machine,cfg,fac);
+}
 
 static uint64_t MSNow()
 {
@@ -31,9 +57,8 @@ static uint64_t MSNow()
 
 class VoteRequestRun:public abb::CallBack{
 public:
-	VoteRequestRun(Server* svr,
-			VoteRequest* req,
-			Peer* peer):peer(peer),req(req),svr(svr){
+	VoteRequestRun(Server* svr,VoteRequest* req,Peer* peer)
+	:peer(peer),req(req),svr(svr){
 		req->Ref();
 		peer->Ref();
 	}
@@ -42,18 +67,17 @@ public:
 		peer->UnRef();
 	}
 	virtual void Call(){
-		LOG(DEBUG) << "SendVoteRequest   " << svr->Name() <<" ->"<< peer->GetName() << " at.term " << req->Term;
 		VoteResponce* rsp = peer->SendVoteRequest(*req);
 		if(rsp){
 			rsp->snd_term = req->Term;
-			Event* ev = new Event(rsp);
+			EventBase* ev = new EventBase(rsp);
 			svr->sa_chan_.Push(ev);
 			rsp->UnRef();
 		}
 		delete this;
 	}
-	VoteRequest* req;
 	Peer* peer;
+	VoteRequest* req;
 	Server* svr;
 };
 
@@ -67,62 +91,63 @@ public:
 };
 const char*const StopRequest::TYPE_NAME = "StopRequest" ;
 
+class TakeSnapshotRequest:public IMessage{
+public:
+	static const char*const TYPE_NAME ;
+public:
+	TakeSnapshotRequest(){};
+	virtual  ~TakeSnapshotRequest(){}
+	virtual const char* TypeName(){return TYPE_NAME;}
+};
+const char*const TakeSnapshotRequest::TYPE_NAME = "TakeSnapshotRequest" ;
+
 
 Server::Server(const std::string& name,
 		const std::string& path,
 		ITranslate* t,
-		const std::string& connectiongString,
+		const std::string& addr,
 		void* ctx,
-		IStateMachine* machine)
-:name_(name),
- itranslate_(t),
- addr_(connectiongString),
- context_(ctx),
- path_(path),
- sa_chan_(4096),
- pending_snapshot_(NULL),
- snapshot_(NULL),
- state_machine_(machine)
+		IStateMachine* machine,const Config& cfg,IFactory* fac)
+:path_(path),
+addr_(addr),
+name_(name),
+config_(cfg),
+cur_term_(0),
+state_(STOPED),
+sa_chan_(10240),
+itranslate_(t),
+context_(ctx),
+pending_snapshot_(NULL),
+snapshot_(NULL),
+state_machine_(machine),
+fac_(fac)
 {
-	cur_term_ = 0;
+	
 	this->log_ = new LogManager(this);
-	state_ = STOPED;
-	election_time_ = 400;
-	heartbeat_time_ = 300;
-
+	monitor_ = new Monitor(this);
+	srand(time(0));
 }
 
 Server::~Server() {
 	this->log_->Close();
 	delete this->log_;
-}
-bool Server::GetLeaderAddr(std::string& addr,std::string* error){
-	abb::Mutex::Locker l(mtx_);
-	if(this->state_ == LEADER){
-		addr = this->addr_;
-		return true;
-	}else if(!this->leader_.empty()){
-		PeerMap::iterator iter = this->peermap_.find(leader_);
-		if( iter != this->peermap_.end()){
-			addr = iter->second->GetAddr();
-			return true;
-		}else{
-			if(error) *error = "noleader peer";
-			return false;
-		}
-	}else{
-		if(error) *error = "noleader";
-		return false;
-	}
+	delete monitor_;
 }
 bool Server::Promotable(){
 	return this->log_->GetCurrentIndex() > 0;
 }
-bool Server::IsLogEmpty(){
+bool Server::IsLogEmpty() const{
 	return log_->IsEmpty();
 }
 uint64_t Server::CommitIndex(){
 	return log_->GetCommitIndex();
+}
+Snapshot* Server::GetSnapshot(){
+	abb::Mutex::Locker l(mtx_);
+	if(snapshot_){
+		snapshot_->Ref();
+	}
+	return snapshot_;
 }
 class PathSort{
 public:
@@ -166,9 +191,10 @@ bool Server::LoadSnapshot(){
 	if(na){
 		snapshot_ = na;
 		if( ! this->state_machine_->Recovery(snapshot_->state) ){
+			LOG(WARN) << "load.snapshot  state.machine.Recovery.fail "; 
 			return false;
 		}
-		for(int i=0;i<na->Peers.size();i++){
+		for(unsigned i=0;i<na->Peers.size();i++){
 			this->AddPeer(na->Peers[i].name,	na->Peers[i].addr);
 		}
 		LOG(DEBUG) << "load.snapshot.term=" << snapshot_->LastTerm << ".index=" <<snapshot_->LastIndex;
@@ -206,21 +232,18 @@ bool Server::TakeSnapshot(std::string& save_error){
 	pending_snapshot_->LastTerm = lastTerm;
 	pending_snapshot_->Path = path;
 	LOG(DEBUG) << "pending_snapshot.lastIndex=" << lastIndex << ".lastTerm" << lastTerm;
-	{
-		abb::Mutex::Locker l(mtx_);
-		for(PeerMap::iterator iter = peermap_.begin();iter != peermap_.end();iter++){
-			PeerInfo info;
-			info.addr = iter->second->GetAddr();
-			info.name = iter->second->GetName();
-			LOG(DEBUG) << "pending_snapshot.peer " << info.name << " " << info.addr;
-			pending_snapshot_->Peers.push_back(info);
-		}
+	for(PeerMap::iterator iter = peermap_.begin();iter != peermap_.end();iter++){
 		PeerInfo info;
-		info.addr = addr_;
-		info.name = this->name_;
+		info.addr = iter->second->GetAddr();
+		info.name = iter->second->GetName();
 		LOG(DEBUG) << "pending_snapshot.peer " << info.name << " " << info.addr;
 		pending_snapshot_->Peers.push_back(info);
 	}
+	PeerInfo info;
+	info.addr = addr_;
+	info.name = this->name_;
+	LOG(DEBUG) << "pending_snapshot.peer " << info.name << " " << info.addr;
+	pending_snapshot_->Peers.push_back(info);
 	this->state_machine_->Save(pending_snapshot_->state);
 
 	this->SaveSnapshot();
@@ -241,19 +264,26 @@ std::string Server::GetSnapshotPath(uint64_t index,uint64_t term){
 	s << this->path_ << "/snapshot/" << term << "_" << index << ".ss";
 	return s.str();
 }
-void* Server::send(IMessage* req,std::string& save_error){
+IMessage* Server::ProcessMessage(IMessage* req,std::string& save_error){
 	if(!req){
 		save_error = "ARGUMENT_ERROR";
 		return NULL;
 	}
-	Event* ev = new Event(req);
+	NotifyEvent* ev = new NotifyEvent(req);
 	ev->Ref();
 	this->sa_chan_.Push(ev);
 	ev->Wait();
 	save_error = ev->err;
-	void* rsp = ev->rsp;
+	IMessage* rsp = ev->rsp;
 	ev->UnRef();
 	return rsp;
+}
+void Server::AsyncProcessMessage(IMessage* msg,EventCallback* cb,void* arg){
+	if(!msg){
+		return;
+	}
+	CallBackEvent* ev = new CallBackEvent(msg,cb,arg);
+	this->sa_chan_.Push(ev);
 }
 bool Server::FlushCommitIndex(){
 	std::string file = path_ + "/conf.tmp";
@@ -288,29 +318,50 @@ bool Server::ReadCommitIndex(){
 	int ret = read(fd,&index,sizeof(index));
 	close(fd);
 	LOG(INFO) << "read.commit.index = " << index;
-	if(ret < sizeof(index)){
+	if(ret < (int)sizeof(index)){
 		return true;
 	}
 	this->log_->UpdateCommitIndex(index);
 	return true;
 }
-IMessage* Server::ProcessMessage(IMessage* req,std::string& save_error){
-	return static_cast<IMessage*>(this->send(req,save_error));
-}
-void* Server::DealCommond(Commond* cmd,std::string& save_error){
-	return this->send(cmd,save_error);
+bool Server::ApplyCommond(Commond* cmd,IMessage& rsp,std::string& save_error){
+	if(this->State() == LEADER){
+		IMessage* ret = this->ProcessMessage(cmd,save_error);
+		if(ret){
+			abb::Buffer buf;
+			ret->Encode(buf);
+			rsp.Decode(buf);
+			return true;
+		}else if(!save_error.empty()){
+			return false;
+		}else{
+			save_error = "cmd ret is null";
+			return false;
+		}
+	}else{
+		std::string addr;
+		{
+			abb::Mutex::Locker l(mtx_);
+			if(leader_addr_.empty()){
+				save_error = "no.leader";
+				return false;
+			}
+			addr = leader_addr_;
+		}
+		return this->itranslate_->SendCommond(this,addr,*cmd,rsp,save_error);
+	}
+	
 }
 void Server::OnAppendEntriesResponce(AppendEntriesResponce* req){
-	Event* ev = new Event(req);
+	EventBase* ev = new EventBase(req);
 	this->sa_chan_.Push(ev);
 }
 void Server::OnSnapshotRecoveryResponce(SnapshotRecoveryResponce* rsp){
-	Event* ev = new Event(rsp);
+	EventBase* ev = new EventBase(rsp);
 	this->sa_chan_.Push(ev);
 }
 bool Server::AddPeer( const std::string&name, const std::string& connectiongString){
 	LOG(INFO) << "raft.addr.peer.name = " << name << " .addr = "<< connectiongString << " .state = " << GetStateString();
-	abb::Mutex::Locker l(mtx_);
 	PeerMap::iterator iter = this->peermap_.find(name);
 	if(iter != this->peermap_.end()){
 		FlushCommitIndex();
@@ -319,7 +370,7 @@ bool Server::AddPeer( const std::string&name, const std::string& connectiongStri
 	if(this->name_ != name){
 		Peer* peer = new Peer(this,name,connectiongString);
 		this->peermap_[name] = peer;
-		if(this->State() == LEADER){
+		if(this->state_ == LEADER){
 			peer->StartHeartbead();
 		}
 	}
@@ -328,21 +379,28 @@ bool Server::AddPeer( const std::string&name, const std::string& connectiongStri
 }
 bool Server::RemovePeer( const std::string&name){
 	LOG(INFO) << "raft.remove.peer.name = " << name << " .state = " << GetStateString();
-	abb::Mutex::Locker l(mtx_);
-	if(this->name_ != name){
-		PeerMap::iterator iter = this->peermap_.find(name);
-		if(iter == this->peermap_.end()){
-			FlushCommitIndex();
-			return false;
+	Peer* peer = NULL;
+	bool needstop_ = false;
+	{
+		if(this->name_ != name){
+			PeerMap::iterator iter = this->peermap_.find(name);
+			if(iter == this->peermap_.end()){
+				FlushCommitIndex();
+				return false;
+			}
+			// Stop peer and remove it.
+			needstop_ = (this->state_ == LEADER);
+			peer = iter->second;
+			this->peermap_.erase(iter);
 		}
-		// Stop peer and remove it.
-		if(this->State() == LEADER){
-			iter->second->StopHeartbead(true);
-		}
-		iter->second->UnRef();
-		this->peermap_.erase(iter);
+		FlushCommitIndex();
 	}
-	FlushCommitIndex();
+	if(peer){
+		if(needstop_){
+			peer->StopHeartbead(true);
+		}
+		peer->UnRef();
+	}
 	return true;
 }
 bool Server::Init(){
@@ -352,6 +410,18 @@ bool Server::Init(){
 	}
 	if(this->State() == INITED){
 		return true;
+	}
+	this->LoadSnapshot();
+	abb::net::IPAddr addr;
+	if(! addr.SetByStringIgnoreIP(addr_) ){
+		return false;
+	}
+	int error;
+	http_svr_.Init(4,false);
+	http_svr_.SetListener(this);
+	if( !http_svr_.Bind(addr,&error)){
+		LOG(WARN) << "bind addr fail:" << addr_ << errno<< "err:"<< strerror(errno);
+		return false;
 	}
 
 	std::string sp = this->path_+"/snapshot";
@@ -368,7 +438,7 @@ bool Server::Init(){
 	this->SetState(INITED);
 	return true;
 }
-bool Server::Start(){
+bool Server::Start(const std::vector<std::string>& addrlist){
 	if(Running()){
 		LOG(DEBUG) << "Raft Is Running" << this->state_;
 		return false;
@@ -381,7 +451,149 @@ bool Server::Start(){
 	thread_.Start(ThreadMain,this);
 	this->pool.SetNumThread(4);
 	this->pool.Start();
-	return true;
+	this->http_svr_.Start();
+
+	if(!IsLogEmpty()){
+		return true;
+	}
+	JoinCommond* cmd = new JoinCommond(this->name_,this->addr_,this->fac_->GetJoinCmd());
+	bool success = false;
+	std::string err;
+	if(addrlist.size() == 0){
+		BoolMessage* rsp = static_cast<BoolMessage*>(this->ProcessMessage(cmd,err));
+		if(rsp){
+			success = rsp->success;
+			rsp->UnRef();
+		}else{
+			LOG(WARN) << "raft.server.start.fail process.join.cmd.error "<<err;
+		}
+
+	}else{
+
+		for(unsigned i=0;i<addrlist.size();i++){
+			LOG(INFO) << "JoinCluster" << addrlist[i];
+			BoolMessage rsp;
+			if( this->itranslate_->SendCommond(this,addrlist[i],*cmd,rsp,err) ){
+				success = rsp.success;
+				if(success) break;
+			}else{
+				LOG(WARN) << "raft.server.start.fail process.join.cmd.error "<<err;
+			}
+		}
+	}
+	if(!success){
+		LOG(INFO) << "Start.Fail";
+		this->Stop();
+	}else{
+		LOG(INFO) << "Start.Success";
+		monitor_->Start();
+	}
+	return success;
+}
+static void HttpEventCallBack(void* arg,IMessage* msg,const std::string& err){
+	abb::http::ResponceWriter* rspw = static_cast<abb::http::ResponceWriter*>(arg); 
+	if(msg){
+		rspw->GetResponce().SetStatusCode(abb::http::code::StatusOK);
+		rspw->GetResponce().GetHeader().Set(abb::http::header::CONTENT_TYPE,"application/octet-stream");
+		msg->Encode( rspw->GetResponce().Body() );
+		msg->UnRef();
+	}else{
+		rspw->GetResponce().SetStatusCode(abb::http::code::StatusInternalServerError);
+		rspw->GetResponce().GetHeader().Set(abb::http::header::CONTENT_TYPE,"text/plain");
+		rspw->GetResponce().Body().Write(err.c_str(),err.size());
+	}
+	rspw->Flush();
+	rspw->UnRef();
+} 
+void Server::HandleRequest(abb::http::Request* req,abb::http::ResponceWriter* rspw){
+	if(req->Method() == abb::http::method::POST ){
+		IMessage* reqmsg = NULL;
+		uint64_t now = MSNow();
+		std::string path = req->GetURL().Path;
+		if( !path.empty()){
+			path = path.substr(1);
+		}
+		bool bcommond = false;
+		if(path == AppendEntriesRequest::TYPE_NAME){
+			reqmsg = new AppendEntriesRequest();
+		}else if(path == VoteRequest::TYPE_NAME){
+			reqmsg = new VoteRequest();
+		}else if(path == SnapshotRequest::TYPE_NAME){
+			reqmsg = new SnapshotRequest();
+		}else if(path == SnapshotRecoveryRequest::TYPE_NAME){
+			reqmsg = new SnapshotRecoveryRequest();
+		}else{
+			int pos = path.find('/');
+			if(pos == -1){
+				rspw->GetResponce().SetStatusCode(abb::http::code::StatusMethodNotAllowed);
+				LOG(WARN) << "unknow path " << path;
+			}else{
+				std::string type = path.substr(0,pos);
+				std::string  cmd = path.substr(pos+1);
+				if(type == Commond::TYPE_NAME){
+					reqmsg = NewCommond(cmd);
+					bcommond = true;
+				}else{
+					LOG(WARN) << "unknow path " << path;
+					rspw->GetResponce().SetStatusCode(abb::http::code::StatusMethodNotAllowed);
+				}
+			}
+		}
+		if(reqmsg){
+			if(!reqmsg->Decode(req->Body())){
+				LOG(INFO) << "decode fail" << path;
+				std::string error = "decode fail";
+				rspw->GetResponce().SetStatusCode(abb::http::code::StatusInternalServerError);
+				rspw->GetResponce().GetHeader().Set(abb::http::header::CONTENT_TYPE,"text/plain");
+				rspw->GetResponce().Body().Write(error.c_str(),error.size());
+			}else{
+				rspw->Ref();
+				if(bcommond){
+					AsyncProcessMessage(reqmsg,HttpEventCallBack,rspw);
+				}else{
+					std::string err;
+					IMessage* back = this->ProcessMessage(reqmsg,err);
+					uint64_t df = MSNow() - now;
+					if(df > 100){
+						LOG(WARN) << "process.message.large " << df << " msg:" << path;
+					}
+					HttpEventCallBack(rspw,back,err);
+				}
+				reqmsg->UnRef();
+				return;
+			}
+		}
+		rspw->Flush();
+	}
+}
+IServer::STATE Server::State(){
+	return state_;
+}
+bool Server::Running(){
+	return ( this->state_ != STOPED && this->state_ != INITED);
+}
+uint64_t Server::Term(){
+	return cur_term_;
+}
+std::string Server::GetStateString(){
+	static const char* STATE_NAME[] = {"LEADER", "FOLLOWER", "CANDIDATE", "STOPED","INITED"};
+	std::ostringstream s;
+	s << "Name: " << this->name_  
+	<< ", State: " << STATE_NAME[state_] 
+	<< ", Term: " << this->cur_term_ 
+	<< ", CommitedIndex: " << this->CommitIndex();
+	return s.str();
+}
+void Server::SetState(STATE s) {
+	this->state_ = s;
+	if (this->state_ == LEADER){
+		this->SetLeaderName(this->name_);
+		this->sync_map_.clear();
+	}
+}
+void Server::Release(){
+	Stop();
+	delete this;
 }
 void Server::Stop(){
 	if(!Running()){
@@ -390,81 +602,96 @@ void Server::Stop(){
 	}
 	StopRequest* req = new StopRequest() ;
 	std::string err;
-	this->send(req,err);
+	this->ProcessMessage(req,err);
+	this->http_svr_.Close();
 }
-void Server::SetState(STATE s) {
-	abb::Mutex::Locker l(mtx_);
 
-	this->state_ = s;
-	if (this->state_ == LEADER){
-		this->leader_ = this->name_;
-		this->sync_map_.clear();
-	}
-
-}
-bool Server::ProcessIfStopEvent(Event* ev){
+bool Server::ProcessIfStopEvent(EventBase* ev){
 	if(ev->Request()->TypeName() == StopRequest::TYPE_NAME){
 		this->SetState(STOPED);
-		ev->Request();
-		ev->Notify();
+		ev->Notify(NULL,"");
 		return true;
 	}
 	return false;
 }
-bool Server::ProcessIfSnapshotRequest(Event* ev){
+bool Server::StartTakeSnapshot(std::string& save_error){
+	BoolMessage* b = static_cast<BoolMessage*>( this->ProcessMessage(new TakeSnapshotRequest(),save_error) );
+	if(b){
+		bool suc = b->success;
+		b->UnRef();
+		return suc;
+	}
+	return false;
+}
+bool Server::ProcessIfTakeSnapshot(EventBase*ev){
+	if(ev->Request()->TypeName() == TakeSnapshotRequest::TYPE_NAME){
+		std::string error;
+		bool suc = this->TakeSnapshot(error);
+		ev->Notify(new BoolMessage(suc),error);
+		return true;
+	}
+	return false;
+}
+bool Server::ProcessIfSnapshotRequest(EventBase* ev){
 	if( ev->Request()->TypeName() == SnapshotRequest::TYPE_NAME ){
 		SnapshotRequest* req = static_cast<SnapshotRequest*>(ev->Request());
 		LogEntry* entry = this->log_->GetLogEntry(req->LastIndex);
+		IMessage* back = NULL;
 		if(entry && entry->term_ == req->LastTerm){
-			ev->rsp = new SnapshotResponce(false);
+			back = new SnapshotResponce(false);
 		}else{
 			this->SetState(SNAPSHOT);
-			ev->rsp = new SnapshotResponce(true);
+			back = new SnapshotResponce(true);
 		}
-		ev->Notify();
+		ev->Notify(back,"");
 		return true;
 	}
 	return false;
 }
-bool Server::ProcessIfAppendEntriesRequest(Event* ev,bool* bupdate){
+bool Server::ProcessIfAppendEntriesRequest(EventBase* ev,bool* bupdate){
 	if( ev->Request()->TypeName() == AppendEntriesRequest::TYPE_NAME ){
-		ev->rsp = this->ProcessAppendEntriesRequest(static_cast<AppendEntriesRequest*>(ev->Request()),ev->err,bupdate);
-		ev->Notify();
+		std::string err;
+		IMessage* back = this->ProcessAppendEntriesRequest(static_cast<AppendEntriesRequest*>(ev->Request()),err,bupdate);
+		ev->Notify(back,err);
 		return true;
 	}
 	return false;
 }
-bool Server::ProcessIfAppendEntriesResponce(Event* ev){
+bool Server::ProcessIfAppendEntriesResponce(EventBase* ev){
 	if(ev->Request()->TypeName() == AppendEntriesResponce::TYPE_NAME){
 		this->ProcessAppendEntriesResponce(static_cast<AppendEntriesResponce*>(ev->Request()));
+		ev->Notify(NULL,"");
 		return true;
 	}
 	return false;
 }
-bool Server::ProcessIfSnapshotRecoveryRequest(Event* ev){
+bool Server::ProcessIfSnapshotRecoveryRequest(EventBase* ev){
 	if(ev->Request()->TypeName() == SnapshotRecoveryRequest::TYPE_NAME){
-		ev->rsp = this->ProcessSnapshotRecoveryRequest(static_cast<SnapshotRecoveryRequest*>(ev->Request()),ev->err);
-		ev->Notify();
+		std::string err;
+		IMessage* back= this->ProcessSnapshotRecoveryRequest(static_cast<SnapshotRecoveryRequest*>(ev->Request()),err);
+		ev->Notify(back,err);
 		return true;
 	}
 	return false;
 }
-bool Server::ProcessIfSnapshotRecoveryResponce(Event* ev){
+bool Server::ProcessIfSnapshotRecoveryResponce(EventBase* ev){
 	if(ev->Request()->TypeName() == SnapshotRecoveryResponce::TYPE_NAME){
 		this->ProcessSnapshotRecoveryResponce(static_cast<SnapshotRecoveryResponce*>(ev->Request()));
+		ev->Notify(NULL,"");
 		return true;
 	}
 	return false;
 }
-bool Server::ProcessIfVoteRequest(Event* ev,bool* bupdate){
+bool Server::ProcessIfVoteRequest(EventBase* ev,bool* bupdate){
 	if(ev->Request()->TypeName() == VoteRequest::TYPE_NAME){
-		ev->rsp = this->ProcessVoteRequest(static_cast<VoteRequest*>(ev->Request()),ev->err,bupdate);
-		ev->Notify();
+		std::string err;
+		IMessage* back= this->ProcessVoteRequest(static_cast<VoteRequest*>(ev->Request()),err,bupdate);
+		ev->Notify(back,err);
 		return true;
 	}
 	return false;
 }
-bool Server::ProcessIfJoinCmd(Event* ev){
+bool Server::ProcessIfJoinCmd(EventBase* ev){
 	if(ev->Request()->TypeName() == Commond::TYPE_NAME){
 		Commond* cmd = static_cast<Commond*>(ev->Request());
 		if(cmd->CommondName() == JoinCommond::CMD_NAME){
@@ -474,21 +701,17 @@ bool Server::ProcessIfJoinCmd(Event* ev){
 				this->SetState(LEADER);
 				this->ProcessCommond(static_cast<Commond*>(ev->Request()),ev);
 			}else{
-				ev->err = "NotLeaderError";
-				ev->Notify();
+				ev->Notify(NULL,"not.leader.error");
 			}
 			return true;
 		}
 	}
 	return false;
 }
-bool Server::ProcessIfVoteResponce(Event* ev,int*vote){
+bool Server::ProcessIfVoteResponce(EventBase* ev,unsigned *vote){
 	if(ev->Request()->TypeName() == VoteResponce::TYPE_NAME){
 		VoteResponce* rsp = static_cast<VoteResponce*>(ev->Request());
-		LOG(DEBUG) << "ProcessVoteResponce" << rsp->VoteGranted;
-		if(this->cur_term_ != rsp->snd_term){
-			LOG(WARN) << "responce.pre.vote";
-		}else{
+		if(this->cur_term_ == rsp->snd_term){
 			if(rsp->VoteGranted){
 				if(vote)(*vote)++;
 			}else if (rsp->Term > this->cur_term_) {
@@ -498,14 +721,13 @@ bool Server::ProcessIfVoteResponce(Event* ev,int*vote){
 				LOG(DEBUG)<< ("server.candidate.vote:denied");
 			}
 		}
-		
-		rsp->UnRef();
+		ev->Notify(NULL,"");
 		return true;
 	}
 	return false;
 }
 
-bool Server::ProcessIfCmd(Event*ev){
+bool Server::ProcessIfCmd(EventBase*ev){
 	if(ev->Request()->TypeName() == Commond::TYPE_NAME){
 		this->ProcessCommond(static_cast<Commond*>(ev->Request()),ev);
 		return true;
@@ -532,21 +754,21 @@ void Server::Loop(){
 	LOG(INFO) << "I am SNAPSHOT";
 	this->SetState(SNAPSHOT);
 	while(this->State() == SNAPSHOT){
-		Event* ev = this->sa_chan_.Poll();
+		EventBase* ev = this->sa_chan_.Poll();
 		if(!ev || !ev->Request()){
 			continue;
 		}
 		LOG(TRACE) << "SnapshotLoop process event:" << ev->Request()->TypeName();
 		if(!ProcessIfStopEvent(ev)){
-			if(!ProcessIfAppendEntriesRequest(ev,NULL)){
-				if(!ProcessIfSnapshotRecoveryRequest(ev)){
-					if(!ProcessIfVoteRequest(ev,NULL)){
-						LOG(WARN) << "SnapshotLoop unknow commond" << ev->Request()->TypeName();
-						ev->err = "NOTLEADERERROR";
-						ev->Notify();
+			if(!ProcessIfTakeSnapshot(ev))
+				if(!ProcessIfAppendEntriesRequest(ev,NULL)){
+					if(!ProcessIfSnapshotRecoveryRequest(ev)){
+						if(!ProcessIfVoteRequest(ev,NULL)){
+							LOG(WARN) << "snapshot.not.deal.this.event" << ev->Request()->TypeName();
+							ev->Notify(NULL,"not.leader.error");
+						}
 					}
 				}
-			}
 		}
 		ev->UnRef();
 	}
@@ -561,23 +783,23 @@ void Server::LeaderLoop(){
 		iter->second->StartHeartbead();
 	}
 	while(this->State() == LEADER){
-		Event* ev = this->sa_chan_.Poll();
+		EventBase* ev = this->sa_chan_.Poll();
 		if(!ev || !ev->Request()){
 			continue;
 		}
 		LOG(TRACE) << "LeaderLoop process event:" << ev->Request()->TypeName();
 		if(!ProcessIfStopEvent(ev)){
-			if(!ProcessIfAppendEntriesRequest(ev,NULL)){
-				if(!ProcessIfAppendEntriesResponce(ev)){
-					if(!ProcessIfVoteRequest(ev,NULL)){
-						if(!ProcessIfCmd(ev)){
-							LOG(WARN) << "LeaderLoop unknow commond" << ev->Request()->TypeName();
-							ev->err = "NOTLEADERERROR";
-							ev->Notify();
+			if(!ProcessIfTakeSnapshot(ev))
+				if(!ProcessIfAppendEntriesRequest(ev,NULL)){
+					if(!ProcessIfAppendEntriesResponce(ev)){
+						if(!ProcessIfVoteRequest(ev,NULL)){
+							if(!ProcessIfCmd(ev)){
+								LOG(WARN) << "leader.not.deal.this.event" << ev->Request()->TypeName();
+								ev->Notify(NULL,"not.leader.error");
+							}
 						}
 					}
 				}
-			}
 		}
 		ev->UnRef();
 	}
@@ -586,14 +808,14 @@ void Server::LeaderLoop(){
 void Server::FollowerLoop(){
 	LOG(INFO) << "I am Follower";
 	this->SetState(FOLLOWER);
-	int e_timeout = this->ElectionTimeout();
+	int e_timeout = this->config_.GetElectionTimeout();
 	int timeout = e_timeout + rand()%e_timeout;
 	while(this->State() == FOLLOWER){
-		Event* ev = NULL;
+		EventBase* ev = NULL;
 		bool bupdate = false;
-		int now = MSNow();
+		uint64_t now = MSNow();
 		if( !this->sa_chan_.PollTimeout(timeout,&ev) || timeout < 0 ){
-			LOG(DEBUG) << "PollTimeout:"<< timeout << "time:" << (MSNow()-now);
+			LOG(DEBUG) << "follower.wait.timeout:"<< timeout << " time:" << (MSNow()-now);
 			if(this->Promotable()){
 				this->SetState(CANDIDATE);
 				break;
@@ -607,19 +829,19 @@ void Server::FollowerLoop(){
 			}
 			LOG(TRACE) << "FollowerLoop process event:" << ev->Request()->TypeName();
 			if(!ProcessIfStopEvent(ev)){
-				if(!ProcessIfAppendEntriesRequest(ev,&bupdate)){
-					if(!ProcessIfAppendEntriesResponce(ev)){
-						if(!ProcessIfVoteRequest(ev,&bupdate)){
-							if(!ProcessIfSnapshotRequest(ev)){
-								if(!ProcessIfJoinCmd(ev)){
-									LOG(WARN) << "FLOOWER NOT DEAL THIS " <<ev->Request()->TypeName();
-									ev->err = "NOTLEADERERROR";
-									ev->Notify();
+				if(!ProcessIfTakeSnapshot(ev))
+					if(!ProcessIfAppendEntriesRequest(ev,&bupdate)){
+						if(!ProcessIfAppendEntriesResponce(ev)){
+							if(!ProcessIfVoteRequest(ev,&bupdate)){
+								if(!ProcessIfSnapshotRequest(ev)){
+									if(!ProcessIfJoinCmd(ev)){
+										LOG(WARN) << "follower.not.deal.this.event  " <<ev->Request()->TypeName();
+										ev->Notify(NULL,"not.leader.error");
+									}
 								}
 							}
 						}
 					}
-				}
 			}
 			ev->UnRef();
 		}
@@ -637,86 +859,106 @@ void Server::CandidateLoop(){
 	this->log_->GetLastInfo(&last_index,&last_term);
 	std::string preleader = this->leader_;
 	this->leader_ = "";
+	bool req_vote = true;
+	int timeout = 0;
+	int e_timeout = this->config_.GetElectionTimeout();
+	unsigned votesGranted = 0;
 	while(this->State() == CANDIDATE){
-		this->cur_term_++;
-		this->voted_for_ = this->name_;
-		int e_timeout = this->ElectionTimeout();
-		int timeout = e_timeout + rand()%e_timeout;
-		int votesGranted = 1;
-		LOG(INFO) << "start_vote" << this->cur_term_;
-		VoteRequest* req = new VoteRequest(this->cur_term_,last_index,last_term,this->name_);
-		{
-			abb::Mutex::Locker l(mtx_);
+		if( req_vote ){
+			this->cur_term_++;
+			this->voted_for_ = this->name_;
+			timeout = e_timeout + rand()%e_timeout;
+			LOG(INFO) << "start_vote" << this->cur_term_ << "timeout:" << timeout;
+			VoteRequest* req = new VoteRequest(this->cur_term_,last_index,last_term,this->name_);
 			for(PeerMap::iterator iter = peermap_.begin();iter != peermap_.end();iter++){
 				this->pool.Execute(new VoteRequestRun(this,req,iter->second));
 			}
-		}
+			req->UnRef();
+			req_vote = false;
 
-		while(this->State() == CANDIDATE){
-			if (votesGranted >= this->QuorumSize()) {
-				LOG(INFO) << "vote.win" << this->name_;
-				this->SetState(LEADER);
-				break;
-			}
-			Event* ev;
-			int now = MSNow();
-			if( !this->sa_chan_.PollTimeout(timeout,&ev) ){
-				break;
-			}else{
-				if(ev  && ev->Request()){
-					LOG(TRACE) << "CandidateLoop process event:" << ev->Request()->TypeName();
-					if(!ProcessIfStopEvent(ev)){
+			
+			votesGranted = 1;
+		}
+		if (votesGranted >= this->QuorumSize()) {
+			LOG(INFO) << "vote.win" << this->name_;
+			this->SetState(LEADER);
+			break;
+		}
+		EventBase* ev = NULL;
+		uint64_t now = MSNow();
+		if( this->sa_chan_.PollTimeout(timeout,&ev) ){
+			if(ev  && ev->Request()){
+				LOG(TRACE) << "CandidateLoop process event:" << ev->Request()->TypeName();
+				if(!ProcessIfStopEvent(ev)){
+					if(!ProcessIfTakeSnapshot(ev))
 						if(!ProcessIfAppendEntriesRequest(ev,NULL)){
 							if(!ProcessIfVoteRequest(ev,NULL)){
 								if(!ProcessIfVoteResponce(ev,&votesGranted)){
-									LOG(WARN) << "CANDIDATE NOT DEAL THIS " << ev->Request()->TypeName();
-									ev->err = "NOTLEADERERROR";
-									ev->Notify();
+									LOG(WARN) << "candidate.not.deal.this.event" << ev->Request()->TypeName();
+									ev->Notify(NULL, "not.leader.error");
 								}
 							}
 						}
-					}
-					ev->UnRef();
 				}
+				ev->UnRef();
 			}
 			timeout -= (MSNow() - now);
 			if(timeout <= 0){
-				break;
+				req_vote = true;
 			}
+		}else{
+			req_vote = true;
 		}
+		
 	}
 
 }
-int Server::QuorumSize(){
-	abb::Mutex::Locker l(mtx_);
+unsigned Server::QuorumSize(){
 	int size = peermap_.size()+1;
 	return (size/2) +1;
 }
 
 void Server::SetCurrentTerm(uint64_t term,const std::string& leaderName){
-	mtx_.Lock();
 	if(term > this->cur_term_){
-		mtx_.UnLock();
 		if(this->state_ == LEADER){
 			for(PeerMap::iterator iter = peermap_.begin();iter != peermap_.end();iter++){
 				iter->second->StopHeartbead(false);
 			}
 		}
-		mtx_.Lock();
 		this->state_ = FOLLOWER;
-		if(this->leader_ != leaderName){
-			LOG(INFO) << "[change.leader] " << this->leader_ << " to " << leaderName;
-			this->leader_ = leaderName;
-		}
+		SetLeaderName(leaderName);
 		this->voted_for_ = "";
 		this->cur_term_ = term;
 		LOG(INFO) << "[update.current.term]  " << term;
-		mtx_.UnLock();
 	}else{
-		mtx_.UnLock();
 		LOG(DEBUG) << "SetCurrentTerm Fail" << term << leaderName << "cur_term_" << cur_term_;
 	}
-
+}
+void Server::SetLeaderName(const std::string & name){
+	if(this->leader_ != name){
+		LOG(INFO) << "[change.leader] " << this->leader_ << "->" << name;
+		this->leader_ = name;
+		if(this->leader_.empty()){
+			LOG(INFO) << "[change.leader.addr] " << leader_addr_ << " to " << "";
+			abb::Mutex::Locker l(mtx_);
+			leader_addr_ = "";
+		}else{
+			abb::Mutex::Locker l(mtx_);
+			if(this->leader_ == this->name_){
+				LOG(INFO) << "[change.leader.addr] " << leader_addr_ << " to " << this->addr_;
+				leader_addr_ = this->addr_;
+			}else{
+				PeerMap::iterator iter = this->peermap_.find(leader_);
+				if( iter != this->peermap_.end()){
+					LOG(INFO) << "[change.leader.addr] " << leader_addr_ << " to " << iter->second->GetAddr();
+					leader_addr_ = iter->second->GetAddr();
+				}else{
+					LOG(INFO) << "[change.leader.addr] " << leader_addr_ << " to " << "";
+					leader_addr_ = "";
+				}
+			}
+		}
+	}
 }
 AppendEntriesResponce* Server::ProcessAppendEntriesRequest(AppendEntriesRequest* req,std::string& save_error,bool* bupdate){
 	if(req->term < this->cur_term_){
@@ -725,10 +967,7 @@ AppendEntriesResponce* Server::ProcessAppendEntriesRequest(AppendEntriesRequest*
 	}
 	if(req->term == this->cur_term_){
 		this->state_ = FOLLOWER;
-		if(this->leader_ != req->LeaderName){
-			LOG(INFO) << "[change.learder] " << this->leader_ << "->" << req->LeaderName;
-			this->leader_ = req->LeaderName;
-		}
+		SetLeaderName(req->LeaderName);
 	}else{
 		SetCurrentTerm(req->term,req->LeaderName);
 	}
@@ -757,7 +996,7 @@ VoteResponce* Server::ProcessVoteRequest(VoteRequest* req,std::string& save_erro
 	if(req->Term > this->cur_term_){
 		SetCurrentTerm(req->Term,"");
 	}else if(this->voted_for_ != "" && this->voted_for_ != req->CandidateName){
-		LOG(DEBUG) << "vote.fail  has.vote.to." << voted_for_ << ".req.name" << req->CandidateName;
+		LOG(DEBUG) << "vote.fail  has.vote.to ( " << voted_for_ << " ).req.name = " << req->CandidateName;
 		if(bupdate)*bupdate = false;
 		return new VoteResponce(cur_term_,false);
 	}
@@ -765,27 +1004,29 @@ VoteResponce* Server::ProcessVoteRequest(VoteRequest* req,std::string& save_erro
 	this->log_->GetLastInfo(&last_index,&last_term);
 
 	if(last_index > req->LastLogIndex || last_term > req->LastLogTerm){
-		LOG(DEBUG) << "vote.fail  term.small.or.index.small.vote.fail" <<  req->CandidateName 
+		LOG(DEBUG) << "vote.fail  term.small.or.index.small.vote.fail " <<  req->CandidateName 
 		<< " index " << last_index << ":" << req->LastLogIndex
 		<< " term " << last_term << ":" << req->LastLogTerm;
 		if(bupdate)*bupdate = false;
 		return new VoteResponce(cur_term_,false);
 	}
-	LOG(DEBUG) << "vote.success  vote.to.req" << req->CandidateName;
+	LOG(DEBUG) << "vote.success  vote.to.req.name = " << req->CandidateName 
+	<< " index " << last_index << ":" << req->LastLogIndex
+	<< " term " << last_term << ":" << req->LastLogTerm;
 	this->voted_for_ = req->CandidateName;
 	if(bupdate)*bupdate = true;
 	return new VoteResponce(cur_term_,true);
 }
-void Server::ProcessCommond(Commond* req,Event* ev){
+void Server::ProcessCommond(Commond* req,EventBase* ev){
 	LOG(DEBUG) << "server.command.process = " << req->CommondName();
 	LogEntry* ent = log_->CreateEntry(this->cur_term_,req,ev);
 	if(!ent){
-		ev->err = "server.command.log.entry.error:creatfail";
-		ev->Notify();
+		ev->Notify(NULL,"server.command.log.entry.error:creatfail");
 	}
-	if(!this->log_->AppendEntry(ent,&ev->err)){
+	std::string err;
+	if(!this->log_->AppendEntry(ent,&err)){
 		LOG(DEBUG) << "server.command.process" << "AppendEntry fail";
-		ev->Notify();
+		ev->Notify(NULL,err);
 		ent->UnRef();
 	}
 	this->sync_map_[this->name_] = true;
@@ -798,19 +1039,16 @@ void Server::ProcessCommond(Commond* req,Event* ev){
 SnapshotRecoveryResponce* Server::ProcessSnapshotRecoveryRequest(SnapshotRecoveryRequest* req,std::string& save_error){
 	LOG(INFO) << "recover.request.reset.peers";
 	this->state_machine_->Recovery(req->state);
-	{
-		abb::Mutex::Locker l(mtx_);
-		this->peermap_.clear();
-		for(int i=0;i<req->Peers.size();i++){
-			LOG(DEBUG) << "recover.request." << req->Peers[i].name << " "<< req->Peers[i].addr;
-			this->AddPeer(req->Peers[i].name,req->Peers[i].addr);
-		}
+	this->peermap_.clear();
+	for(unsigned i=0;i<req->Peers.size();i++){
+		LOG(DEBUG) << "recover.request." << req->Peers[i].name << " "<< req->Peers[i].addr;
+		this->AddPeer(req->Peers[i].name,req->Peers[i].addr);
 	}
 	LOG(DEBUG) << "snapshot.recover.request.LastIndex=" << req->LastIndex << ".lastTerm="<<req->LastTerm << ".LeaderName=" << req->LeaderName;
 	this->cur_term_ = req->LastTerm;
 	this->log_->UpdateCommitIndex(req->LastIndex);
 	pending_snapshot_ = new Snapshot(req->LastIndex,req->LastTerm,req->Peers,this->GetSnapshotPath(req->LastIndex,req->LastTerm));
-	pending_snapshot_->state.Write(req->state.Data(),req->state.Size());
+	pending_snapshot_->state.Write(req->state.ReadPtr(),req->state.ReadSize());
 	this->SaveSnapshot();
 	this->log_->Compact(req->LastIndex,req->LastTerm);
 	SnapshotRecoveryResponce * rsp = new SnapshotRecoveryResponce(req->LastTerm,true,req->LastIndex);
@@ -823,13 +1061,18 @@ bool Server::SaveSnapshot(){
 	if(!this->pending_snapshot_->Save()){
 		return false;
 	}
-	Snapshot* tmp = this->snapshot_;
-	this->snapshot_ = this->pending_snapshot_;
+	Snapshot* tmp = NULL;
+	{
+		abb::Mutex::Locker l(mtx_);
+		tmp = this->snapshot_;
+		this->snapshot_ = this->pending_snapshot_;
+	}
+	
 	if(tmp && !(tmp->LastIndex == snapshot_->LastIndex && tmp->LastTerm == snapshot_->LastTerm)){
 		tmp->Remove();
 	}
 	pending_snapshot_ = NULL;
-	if(tmp)delete tmp;
+	if(tmp)tmp->UnRef();
 	return true;
 }
 void Server::ProcessSnapshotRecoveryResponce(SnapshotRecoveryResponce* rsp){
@@ -856,8 +1099,8 @@ void Server::ProcessAppendEntriesResponce(AppendEntriesResponce* rsp){
 	for(PeerMap::iterator iter = peermap_.begin();iter != peermap_.end();iter++){
 		arr.push_back(iter->second->GetPreLogIndex());
 	}
-	std::less<uint64_t> les;
-	std::sort(arr.begin(),arr.end(),les);
+	std::greater<uint64_t> gtr;
+	std::sort(arr.begin(),arr.end(),gtr);
 
 	uint64_t commitIndex = arr[QuorumSize()-1];
 	uint64_t committedIndex = this->log_->GetCommitIndex();
