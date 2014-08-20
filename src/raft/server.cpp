@@ -23,6 +23,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/time.h>
+
 #define NumberOfLogEntriesAfterSnapshot 100
 namespace raft {
 static abb::Mutex g_mtx;
@@ -45,15 +46,6 @@ extern IServer* NewServer(const std::string& name,
 	return new Server(name,path,new HttpTranslate(),addr,ctx,machine,cfg,fac);
 }
 
-static uint64_t MSNow()
-{
-	struct timeval time;
-	gettimeofday(&time,NULL);
-	uint64_t tmp =  time.tv_sec;
-	tmp*=1000;
-	tmp+=time.tv_usec/1000;
-	return tmp;
-}
 
 class VoteRequestRun:public abb::CallBack{
 public:
@@ -70,8 +62,7 @@ public:
 		VoteResponce* rsp = peer->SendVoteRequest(*req);
 		if(rsp){
 			rsp->snd_term = req->Term;
-			EventBase* ev = new EventBase(rsp);
-			svr->sa_chan_.Push(ev);
+			svr->VoidProcessMessage(rsp);
 			rsp->UnRef();
 		}
 		delete this;
@@ -133,15 +124,7 @@ Server::~Server() {
 	delete this->log_;
 	delete monitor_;
 }
-bool Server::Promotable(){
-	return this->log_->GetCurrentIndex() > 0;
-}
-bool Server::IsLogEmpty() const{
-	return log_->IsEmpty();
-}
-uint64_t Server::CommitIndex(){
-	return log_->GetCommitIndex();
-}
+
 Snapshot* Server::GetSnapshot(){
 	abb::Mutex::Locker l(mtx_);
 	if(snapshot_){
@@ -285,6 +268,13 @@ void Server::AsyncProcessMessage(IMessage* msg,EventCallback* cb,void* arg){
 	CallBackEvent* ev = new CallBackEvent(msg,cb,arg);
 	this->sa_chan_.Push(ev);
 }
+void Server::VoidProcessMessage(IMessage*msg){
+	if(!msg){
+		return;
+	}
+	EventBase* ev = new EventBase(msg);
+	this->sa_chan_.Push(ev);
+}
 bool Server::FlushCommitIndex(){
 	std::string file = path_ + "/conf.tmp";
 	std::string o_file = path_ + "/conf";
@@ -352,14 +342,8 @@ bool Server::ApplyCommond(Commond* cmd,IMessage& rsp,std::string& save_error){
 	}
 	
 }
-void Server::OnAppendEntriesResponce(AppendEntriesResponce* req){
-	EventBase* ev = new EventBase(req);
-	this->sa_chan_.Push(ev);
-}
-void Server::OnSnapshotRecoveryResponce(SnapshotRecoveryResponce* rsp){
-	EventBase* ev = new EventBase(rsp);
-	this->sa_chan_.Push(ev);
-}
+void Server::OnAppendEntriesResponce(AppendEntriesResponce*msg){VoidProcessMessage(msg);}
+void Server::OnSnapshotRecoveryResponce(SnapshotRecoveryResponce* msg){VoidProcessMessage(msg);}
 bool Server::AddPeer( const std::string&name, const std::string& connectiongString){
 	LOG(INFO) << "raft.addr.peer.name = " << name << " .addr = "<< connectiongString << " .state = " << GetStateString();
 	PeerMap::iterator iter = this->peermap_.find(name);
@@ -372,6 +356,10 @@ bool Server::AddPeer( const std::string&name, const std::string& connectiongStri
 		this->peermap_[name] = peer;
 		if(this->state_ == LEADER){
 			peer->StartHeartbead();
+		}
+		if(this->leader_ == name){
+			abb::Mutex::Locker l(mtx_);
+			leader_addr_ = connectiongString;
 		}
 	}
 	FlushCommitIndex();
@@ -453,31 +441,33 @@ bool Server::Start(const std::vector<std::string>& addrlist){
 	this->pool.Start();
 	this->http_svr_.Start();
 
-	if(!IsLogEmpty()){
-		return true;
-	}
-	JoinCommond* cmd = new JoinCommond(this->name_,this->addr_,this->fac_->GetJoinCmd());
 	bool success = false;
-	std::string err;
-	if(addrlist.size() == 0){
-		BoolMessage* rsp = static_cast<BoolMessage*>(this->ProcessMessage(cmd,err));
-		if(rsp){
-			success = rsp->success;
-			rsp->UnRef();
-		}else{
-			LOG(WARN) << "raft.server.start.fail process.join.cmd.error "<<err;
-		}
 
+	if(!IsLogEmpty()){
+		success = true;
 	}else{
-
-		for(unsigned i=0;i<addrlist.size();i++){
-			LOG(INFO) << "JoinCluster" << addrlist[i];
-			BoolMessage rsp;
-			if( this->itranslate_->SendCommond(this,addrlist[i],*cmd,rsp,err) ){
-				success = rsp.success;
-				if(success) break;
+		JoinCommond* cmd = new JoinCommond(this->name_,this->addr_,this->fac_->GetJoinCmd());
+		std::string err;
+		if(addrlist.size() == 0){
+			BoolMessage* rsp = static_cast<BoolMessage*>(this->ProcessMessage(cmd,err));
+			if(rsp){
+				success = rsp->success;
+				rsp->UnRef();
 			}else{
 				LOG(WARN) << "raft.server.start.fail process.join.cmd.error "<<err;
+			}
+
+		}else{
+
+			for(unsigned i=0;i<addrlist.size();i++){
+				LOG(INFO) << "JoinCluster" << addrlist[i];
+				BoolMessage rsp;
+				if( this->itranslate_->SendCommond(this,addrlist[i],*cmd,rsp,err) ){
+					success = rsp.success;
+					if(success) break;
+				}else{
+					LOG(WARN) << "raft.server.start.fail process.join.cmd.error "<<err;
+				}
 			}
 		}
 	}
@@ -490,7 +480,7 @@ bool Server::Start(const std::vector<std::string>& addrlist){
 	}
 	return success;
 }
-static void HttpEventCallBack(void* arg,IMessage* msg,const std::string& err){
+static void HttpEventCallBack(void* arg,const EventBase* event_base,IMessage* msg,const std::string& err){
 	abb::http::ResponceWriter* rspw = static_cast<abb::http::ResponceWriter*>(arg); 
 	if(msg){
 		rspw->GetResponce().SetStatusCode(abb::http::code::StatusOK);
@@ -508,12 +498,10 @@ static void HttpEventCallBack(void* arg,IMessage* msg,const std::string& err){
 void Server::HandleRequest(abb::http::Request* req,abb::http::ResponceWriter* rspw){
 	if(req->Method() == abb::http::method::POST ){
 		IMessage* reqmsg = NULL;
-		uint64_t now = MSNow();
 		std::string path = req->GetURL().Path;
 		if( !path.empty()){
 			path = path.substr(1);
 		}
-		bool bcommond = false;
 		if(path == AppendEntriesRequest::TYPE_NAME){
 			reqmsg = new AppendEntriesRequest();
 		}else if(path == VoteRequest::TYPE_NAME){
@@ -532,7 +520,6 @@ void Server::HandleRequest(abb::http::Request* req,abb::http::ResponceWriter* rs
 				std::string  cmd = path.substr(pos+1);
 				if(type == Commond::TYPE_NAME){
 					reqmsg = NewCommond(cmd);
-					bcommond = true;
 				}else{
 					LOG(WARN) << "unknow path " << path;
 					rspw->GetResponce().SetStatusCode(abb::http::code::StatusMethodNotAllowed);
@@ -548,17 +535,7 @@ void Server::HandleRequest(abb::http::Request* req,abb::http::ResponceWriter* rs
 				rspw->GetResponce().Body().Write(error.c_str(),error.size());
 			}else{
 				rspw->Ref();
-				if(bcommond){
-					AsyncProcessMessage(reqmsg,HttpEventCallBack,rspw);
-				}else{
-					std::string err;
-					IMessage* back = this->ProcessMessage(reqmsg,err);
-					uint64_t df = MSNow() - now;
-					if(df > 100){
-						LOG(WARN) << "process.message.large " << df << " msg:" << path;
-					}
-					HttpEventCallBack(rspw,back,err);
-				}
+				AsyncProcessMessage(reqmsg,HttpEventCallBack,rspw);
 				reqmsg->UnRef();
 				return;
 			}
@@ -566,22 +543,15 @@ void Server::HandleRequest(abb::http::Request* req,abb::http::ResponceWriter* rs
 		rspw->Flush();
 	}
 }
-IServer::STATE Server::State(){
-	return state_;
-}
-bool Server::Running(){
-	return ( this->state_ != STOPED && this->state_ != INITED);
-}
-uint64_t Server::Term(){
-	return cur_term_;
-}
 std::string Server::GetStateString(){
+	abb::Mutex::Locker l(mtx_);
 	static const char* STATE_NAME[] = {"LEADER", "FOLLOWER", "CANDIDATE", "STOPED","INITED"};
 	std::ostringstream s;
 	s << "Name: " << this->name_  
 	<< ", State: " << STATE_NAME[state_] 
 	<< ", Term: " << this->cur_term_ 
-	<< ", CommitedIndex: " << this->CommitIndex();
+	<< ", CommitedIndex: " << this->CommitIndex()
+	<< ", LeaderAddr: " << this->leader_addr_;
 	return s.str();
 }
 void Server::SetState(STATE s) {
@@ -713,6 +683,7 @@ bool Server::ProcessIfVoteResponce(EventBase* ev,unsigned *vote){
 		VoteResponce* rsp = static_cast<VoteResponce*>(ev->Request());
 		if(this->cur_term_ == rsp->snd_term){
 			if(rsp->VoteGranted){
+				LOG(DEBUG)<< ("server.candidate.vote.success");
 				if(vote)(*vote)++;
 			}else if (rsp->Term > this->cur_term_) {
 				LOG(DEBUG)<< ("server.candidate.vote.failed");
@@ -758,6 +729,7 @@ void Server::Loop(){
 		if(!ev || !ev->Request()){
 			continue;
 		}
+		ev->SetStart();
 		LOG(TRACE) << "SnapshotLoop process event:" << ev->Request()->TypeName();
 		if(!ProcessIfStopEvent(ev)){
 			if(!ProcessIfTakeSnapshot(ev))
@@ -787,6 +759,7 @@ void Server::LeaderLoop(){
 		if(!ev || !ev->Request()){
 			continue;
 		}
+		ev->SetStart();
 		LOG(TRACE) << "LeaderLoop process event:" << ev->Request()->TypeName();
 		if(!ProcessIfStopEvent(ev)){
 			if(!ProcessIfTakeSnapshot(ev))
@@ -813,9 +786,9 @@ void Server::FollowerLoop(){
 	while(this->State() == FOLLOWER){
 		EventBase* ev = NULL;
 		bool bupdate = false;
-		uint64_t now = MSNow();
+		uint64_t now = abb::Date::Now().MilliSecond();
 		if( !this->sa_chan_.PollTimeout(timeout,&ev) || timeout < 0 ){
-			LOG(DEBUG) << "follower.wait.timeout:"<< timeout << " time:" << (MSNow()-now);
+			LOG(DEBUG) << "follower.wait.timeout:"<< timeout << " time:" << (abb::Date::Now().MilliSecond()-now);
 			if(this->Promotable()){
 				this->SetState(CANDIDATE);
 				break;
@@ -827,9 +800,10 @@ void Server::FollowerLoop(){
 				LOG(DEBUG) << "EMPTY";
 				continue;
 			}
+			ev->SetStart();
 			LOG(TRACE) << "FollowerLoop process event:" << ev->Request()->TypeName();
 			if(!ProcessIfStopEvent(ev)){
-				if(!ProcessIfTakeSnapshot(ev))
+				if(!ProcessIfTakeSnapshot(ev)){
 					if(!ProcessIfAppendEntriesRequest(ev,&bupdate)){
 						if(!ProcessIfAppendEntriesResponce(ev)){
 							if(!ProcessIfVoteRequest(ev,&bupdate)){
@@ -842,6 +816,10 @@ void Server::FollowerLoop(){
 							}
 						}
 					}
+				}else{
+					bupdate = true;
+				}
+					
 			}
 			ev->UnRef();
 		}
@@ -849,7 +827,7 @@ void Server::FollowerLoop(){
 		if(bupdate){
 			timeout = e_timeout + rand()%e_timeout;
 		}else{
-			timeout -= (MSNow() - now);
+			timeout -= (abb::Date::Now().MilliSecond() - now);
 		}
 	}
 }
@@ -885,9 +863,10 @@ void Server::CandidateLoop(){
 			break;
 		}
 		EventBase* ev = NULL;
-		uint64_t now = MSNow();
+		uint64_t now = abb::Date::Now().MilliSecond();
 		if( this->sa_chan_.PollTimeout(timeout,&ev) ){
 			if(ev  && ev->Request()){
+				ev->SetStart();
 				LOG(TRACE) << "CandidateLoop process event:" << ev->Request()->TypeName();
 				if(!ProcessIfStopEvent(ev)){
 					if(!ProcessIfTakeSnapshot(ev))
@@ -902,7 +881,7 @@ void Server::CandidateLoop(){
 				}
 				ev->UnRef();
 			}
-			timeout -= (MSNow() - now);
+			timeout -= (abb::Date::Now().MilliSecond() - now);
 			if(timeout <= 0){
 				req_vote = true;
 			}
@@ -912,10 +891,6 @@ void Server::CandidateLoop(){
 		
 	}
 
-}
-unsigned Server::QuorumSize(){
-	int size = peermap_.size()+1;
-	return (size/2) +1;
 }
 
 void Server::SetCurrentTerm(uint64_t term,const std::string& leaderName){
@@ -962,6 +937,7 @@ void Server::SetLeaderName(const std::string & name){
 }
 AppendEntriesResponce* Server::ProcessAppendEntriesRequest(AppendEntriesRequest* req,std::string& save_error,bool* bupdate){
 	if(req->term < this->cur_term_){
+		LOG(WARN) << "process.append.entries.term.fial [" << req->term << ":" << this->cur_term_ << "]" ;
 		if(bupdate)*bupdate = false;
 		return new AppendEntriesResponce(cur_term_,this->log_->GetCurrentIndex(),false,this->log_->GetCommitIndex());
 	}
@@ -971,19 +947,16 @@ AppendEntriesResponce* Server::ProcessAppendEntriesRequest(AppendEntriesRequest*
 	}else{
 		SetCurrentTerm(req->term,req->LeaderName);
 	}
+	if(bupdate)*bupdate = true;
 	if( !this->log_->Truncate(req->PrevLogIndex,req->PrevLogTerm) ){
-		if(bupdate)*bupdate = true;
 		return new AppendEntriesResponce(cur_term_,this->log_->GetCurrentIndex(),false,this->log_->GetCommitIndex());
 	}
 	if(! this->log_->AppendEntries(req->Entries,NULL)){
-		if(bupdate)*bupdate = true;
 		return new AppendEntriesResponce(cur_term_,this->log_->GetCurrentIndex(),false,this->log_->GetCommitIndex());
 	}
 	if(!this->log_->CommitToIndex(req->CommitIndex)){
-		if(bupdate)*bupdate = true;
 		return new AppendEntriesResponce(cur_term_,this->log_->GetCurrentIndex(),false,this->log_->GetCommitIndex());
 	}
-	if(bupdate)*bupdate = true;
 	return new AppendEntriesResponce(cur_term_,this->log_->GetCurrentIndex(),true,this->log_->GetCommitIndex());
 }
 VoteResponce* Server::ProcessVoteRequest(VoteRequest* req,std::string& save_error,bool* bupdate){
@@ -1021,13 +994,16 @@ void Server::ProcessCommond(Commond* req,EventBase* ev){
 	LOG(DEBUG) << "server.command.process = " << req->CommondName();
 	LogEntry* ent = log_->CreateEntry(this->cur_term_,req,ev);
 	if(!ent){
+		LOG(DEBUG) << "server.command.process.create.entry.fail ";
 		ev->Notify(NULL,"server.command.log.entry.error:creatfail");
+		return;
 	}
 	std::string err;
 	if(!this->log_->AppendEntry(ent,&err)){
-		LOG(DEBUG) << "server.command.process" << "AppendEntry fail";
+		LOG(DEBUG) << "server.command.process.append.entry.fail " << err;
 		ev->Notify(NULL,err);
 		ent->UnRef();
+		return;
 	}
 	this->sync_map_[this->name_] = true;
 	if(this->peermap_.size() == 0){

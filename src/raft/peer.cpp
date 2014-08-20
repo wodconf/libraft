@@ -3,6 +3,8 @@
 #include "raft/server.hpp"
 #include "log.hpp"
 #include <abb/base/log.hpp>
+
+
 #define MAX_ENTRY_ONCE 200
 namespace raft {
 
@@ -14,7 +16,6 @@ Peer::Peer(Server* svr,
  addr_(addr),
  pre_log_index_(0),
  bflush_(false),
- pre_times(0),
  bstop_(false){
 }
 
@@ -36,9 +37,12 @@ void Peer::WaitStop(){
 	LOG(DEBUG) <<  this->name_ <<".stop.heartbeat.success";
 }
 void  Peer::Loop(){
+	this->Flush();
 	while(!bstop_){
 		if(!notify_.WaitTimeout(this->svr_->GetConfig().GetHeartBeatTimeout())){
 			this->Flush();
+		}else{
+			LOG(INFO)<<  this->name_ << ".stop.wake.up";
 		}
 	}
 	if(bflush_){
@@ -99,11 +103,9 @@ void Peer::SendSnapshotRequest(SnapshotRequest&req){
 		rsp = NULL;
 	}
 	if(!rsp){
-		pre_times++;
 		LOG(DEBUG)<< "peer.snap.timeout: " << this->svr_->Name()<< "->" << this->name_ << error;
 		return;
 	}
-	pre_times = 0;
 	LOG(DEBUG)<< "peer.snap.recv: "<<this->name_;
 	if(rsp->success){
 		this->SendSnapshotRecoveryRequest();
@@ -149,13 +151,10 @@ void Peer::SendAppendEntriesRequest(AppendEntriesRequest&req){
 		rsp = NULL;
 	}
 	if(!rsp){
-		pre_times++;
 		LOG(TRACE)<< "peer.append.timeout: " << this->svr_->Name()<< "->" << this->name_ << " " << error;
 		return;
 	}
-	pre_times = 0;
 	LOG(TRACE)<<"peer.append.resp: "<< this->svr_->Name()<< "<-" << this->GetName();
-	mtx_.Lock();
 	if(rsp->Success){
 		if(req.Entries.size() > 0){
 			this->pre_log_index_ = req.Entries.back()->index_;
@@ -176,7 +175,6 @@ void Peer::SendAppendEntriesRequest(AppendEntriesRequest&req){
 			LOG(DEBUG) << "peer.append.resp.decrement: "<< this->name_ << "; idx ="<< this->pre_log_index_;
 		}
 	}
-	mtx_.UnLock();
 	rsp->peer = this->name_;
 	this->svr_->OnAppendEntriesResponce(rsp);
 	rsp->UnRef();

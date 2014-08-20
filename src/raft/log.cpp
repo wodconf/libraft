@@ -223,13 +223,17 @@ bool LogManager::GetEntriesAfter(int max,uint64_t index,LogEntryArray* arr,uint6
 		return false;
 	}
 	if (index == this->start_index_) {
-		*arr = this->log_entry_arr_;
+		for(unsigned i=0;i<log_entry_arr_.size() && max > 0;i++,max--){
+			this->log_entry_arr_[i]->Ref();
+			arr->push_back(log_entry_arr_[i]);
+		}
 		*term = this->start_term_;
 		return true;
 	}
 	int st = index - this->start_index_;
 	*term = this->log_entry_arr_[st-1]->term_;
 	for(;st < (int)this->log_entry_arr_.size() && max > 0;st++,max--){
+		log_entry_arr_[st]->Ref();
 		arr->push_back(log_entry_arr_[st]);
 	}
 	return true;

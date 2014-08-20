@@ -45,7 +45,9 @@ AppendEntriesRequest::AppendEntriesRequest(uint64_t term,
 }
 
 AppendEntriesRequest::~AppendEntriesRequest() {
-
+	for(unsigned i=0;i<Entries.size();i++){
+		Entries[i]->UnRef();
+	}
 }
 bool AppendEntriesRequest::Encode(abb::Buffer &buf){
 	buf.NET_WriteUint64(term);

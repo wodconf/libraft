@@ -6,6 +6,7 @@
 #include "vote.hpp"
 #include "append_entries.hpp"
 #include "snapshot.hpp"
+#include <abb/base/date.hpp>
 namespace raft {
 class Server;
 class Peer :public abb::RefObject{
@@ -44,13 +45,11 @@ private:
 	void SendSnapshotRequest(SnapshotRequest&req);
 	Server* svr_;
 	abb::Thread thread_;
-	abb::Mutex mtx_;
 	std::string name_;
 	std::string addr_;
 	uint64_t pre_log_index_;
 	bool bflush_;
 	abb::Notification notify_;
-	uint64_t pre_times;
 	bool bstop_;
 };
 
