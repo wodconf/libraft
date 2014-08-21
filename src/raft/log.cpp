@@ -123,7 +123,7 @@ bool LogManager::Compact(uint64_t index,uint64_t term){
 	}
 	fcntl(fd, F_SETFD, FD_CLOEXEC);
 	for(unsigned i=0;i<arr.size();i++){
-		if(!WriteEntry(fd,arr[i],false)){
+		if(!WriteEntry(fd,arr[i])){
 			close(fd);
 			remove(newpath.c_str());
 			for(unsigned j=0;j<arr.size();j++){
@@ -146,7 +146,7 @@ bool LogManager::Compact(uint64_t index,uint64_t term){
 	return true;
 
 }
-bool  LogManager::WriteEntry(int fd,LogEntry* entry,bool bsync){
+bool  LogManager::WriteEntry(int fd,LogEntry* entry){
 	entry->position = lseek(fd,0,SEEK_CUR);
 	abb::Buffer buf;
 	entry->Encode(buf);
@@ -162,7 +162,6 @@ bool  LogManager::WriteEntry(int fd,LogEntry* entry,bool bsync){
 			break;
 		}
 	}
-	if(bsync)fsync(fd);
 	return true;
 }
 LogEntry* LogManager::CreateEntry(uint64_t term,Commond* cmd,EventBase* ev){
@@ -183,7 +182,7 @@ bool LogManager::AppendEntry(LogEntry* entry,std::string* save_err){
 			return false;
 		}
 	}
-	WriteEntry(fd_,entry,true);
+	WriteEntry(fd_,entry);
 	this->log_entry_arr_.push_back(entry);
 	return true;
 }
@@ -204,7 +203,7 @@ bool LogManager::AppendEntries(LogEntryArray entries,std::string* save_err){
 			}
 		}
 		entry->Ref();
-		WriteEntry(fd_,entry,false);
+		WriteEntry(fd_,entry);
 		this->log_entry_arr_.push_back(entry);
 	}
 	if(entries.size() > 0)

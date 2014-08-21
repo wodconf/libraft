@@ -50,6 +50,7 @@ void  Peer::Loop(){
 	}
 }
 void Peer::Flush(){
+	LOG(TRACE) << "peer.flush: " << this->name_;
 	uint64_t term;
 	LogManager::LogEntryArray arr;
 	uint64_t start_index;
@@ -65,24 +66,15 @@ void Peer::Flush(){
 		}
 	}else{
 		this->svr_->GetLog()->GetEntriesAfter(MAX_ENTRY_ONCE,this->pre_log_index_,&arr,&term);
-		if(arr.size() > 0){
-			AppendEntriesRequest req(this->svr_->Term(),
-					pre_log_index_,
-					term,
-					svr_->GetLog()->GetCommitIndex(),
-					this->svr_->Name(),
-					arr);
-			this->SendAppendEntriesRequest(req);
-			return;
-		}
+		AppendEntriesRequest req(this->svr_->Term(),
+				pre_log_index_,
+				term,
+				svr_->GetLog()->GetCommitIndex(),
+				this->svr_->Name(),
+				arr);
+		this->SendAppendEntriesRequest(req);
 	}
-	AppendEntriesRequest req(this->svr_->Term(),
-			pre_log_index_,
-			term,
-			svr_->GetLog()->GetCommitIndex(),
-			this->svr_->Name());
-	this->SendAppendEntriesRequest(req);
-
+	LOG(TRACE) << "peer.flush.end: " << this->name_;
 }
 VoteResponce* Peer::SendVoteRequest(VoteRequest&req){
 	VoteResponce* rsp = new VoteResponce();

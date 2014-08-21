@@ -46,7 +46,7 @@ public:
 	bool IsEmpty();
 	bool Compact(uint64_t index,uint64_t term);
 private:
-	static bool WriteEntry(int fd,LogEntry* entry,bool bsync);
+	static bool WriteEntry(int fd,LogEntry* entry);
 	uint64_t InternalGetCurrentIndex(){
 		if(log_entry_arr_.size() == 0){
 			return start_index_;
