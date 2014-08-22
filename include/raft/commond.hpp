@@ -12,7 +12,7 @@ class Commond;
 typedef Commond* (*common_factory_fn)();
 extern void RegisterCommand(const std::string& name,common_factory_fn fn);
 extern Commond* NewCommond(const std::string& name);
-
+extern bool CommondRegisted(const std::string& name);
 template <class T>
 Commond* T_CommondCreator(){
 	return new T();

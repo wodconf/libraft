@@ -50,7 +50,6 @@ void  Peer::Loop(){
 	}
 }
 void Peer::Flush(){
-	LOG(TRACE) << "peer.flush: " << this->name_;
 	uint64_t term;
 	LogManager::LogEntryArray arr;
 	uint64_t start_index;
@@ -74,7 +73,6 @@ void Peer::Flush(){
 				arr);
 		this->SendAppendEntriesRequest(req);
 	}
-	LOG(TRACE) << "peer.flush.end: " << this->name_;
 }
 VoteResponce* Peer::SendVoteRequest(VoteRequest&req){
 	VoteResponce* rsp = new VoteResponce();

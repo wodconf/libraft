@@ -11,6 +11,9 @@ void RegisterCommand(const std::string& name,common_factory_fn fn){
 	LOG(DEBUG) << "RegisterCommand<" << name << ">";
 	cmd_fac_map_[name] = fn;
 }
+bool CommondRegisted(const std::string& name){
+	return cmd_fac_map_.find(name) != cmd_fac_map_.end();
+}
 Commond* NewCommond(const std::string& name){
 	ITER iter = cmd_fac_map_.find(name);
 	if(iter == cmd_fac_map_.end()){

@@ -229,7 +229,10 @@ bool Server::TakeSnapshot(std::string& save_error){
 	pending_snapshot_->Peers.push_back(info);
 	this->state_machine_->Save(pending_snapshot_->state);
 
-	this->SaveSnapshot();
+	if( ! this->SaveSnapshot() ){
+		pending_snapshot_->UnRef();
+		pending_snapshot_ = NULL;
+	}
 
 	if(lastIndex - startIndex > NumberOfLogEntriesAfterSnapshot){
 		uint64_t compactIndex = lastIndex - NumberOfLogEntriesAfterSnapshot;
@@ -315,6 +318,14 @@ bool Server::ReadCommitIndex(){
 	return true;
 }
 bool Server::ApplyCommond(Commond* cmd,IMessage& rsp,std::string& save_error){
+	if(!cmd) {
+		save_error = "apply.commond.argument.error cmd is null";
+		return false;
+	}
+	if(!CommondRegisted(cmd->CommondName())){
+		save_error = "apply.commond.argument.error cmd is not regist";
+		return false;
+	}
 	if(this->State() == LEADER){
 		IMessage* ret = this->ProcessMessage(cmd,save_error);
 		if(ret){
@@ -1034,9 +1045,15 @@ bool Server::SaveSnapshot(){
 	if(!this->pending_snapshot_){
 		return false;
 	}
-	if(!this->pending_snapshot_->Save()){
-		return false;
+	int num = 0;
+	while(true){
+		if(!this->pending_snapshot_->Save()){
+			if(num++ >= 3) return false;
+		}else{
+			return true;
+		}
 	}
+	
 	Snapshot* tmp = NULL;
 	{
 		abb::Mutex::Locker l(mtx_);
