@@ -318,12 +318,12 @@ bool Server::ReadCommitIndex(){
 	return true;
 }
 bool Server::ApplyCommond(Commond* cmd,IMessage& rsp,std::string& save_error){
-	if(!cmd) {
+	if(!cmd || !cmd->CommondName()) {
 		save_error = "apply.commond.argument.error cmd is null";
 		return false;
 	}
-	if(!CommondRegisted(cmd->CommondName())){
-		save_error = "apply.commond.argument.error cmd is not regist";
+	if(!CommondRegisted(std::string( cmd->CommondName() ) )){
+		save_error = "apply.commond.argument.error cmd is not regist" + std::string( cmd->CommondName() );
 		return false;
 	}
 	if(this->State() == LEADER){
