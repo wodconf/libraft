@@ -381,4 +381,4 @@ bool LogManager::IsEmpty(){
 	abb::Mutex::Locker l(mtx_);
 	return (log_entry_arr_.size() == 0) &&( start_index_ == 0 );
 }
-} /* namespace translate */
+} 

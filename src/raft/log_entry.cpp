@@ -52,4 +52,4 @@ bool LogEntry::Decode(abb::Buffer& buf){
 	return ok;
 }
 
-} /* namespace adcloud */
+} 

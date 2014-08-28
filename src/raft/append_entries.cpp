@@ -113,4 +113,4 @@ bool AppendEntriesResponce::Decode(abb::Buffer &buf){
 	buf >> Success;
 	return true;
 }
-} /* namespace adcloud */
+}
