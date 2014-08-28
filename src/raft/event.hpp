@@ -25,17 +25,17 @@ public:
 		}else{
 			name = this->Request()->TypeName();
 		}
-		uint64_t wait_time = this->StartTime() - this->CreateTime();
-		uint64_t endtime = this->EndTime() - this->StartTime();
-		if(wait_time > 10*1000 || endtime > 10*1000){
+		int64_t wait_time = this->StartTime() - this->CreateTime();
+		int64_t endtime = this->EndTime() - this->StartTime();
+		if(wait_time > 400*1000 || endtime > 400*1000){
 			LOG(DEBUG) << name << " process.wait.time " << wait_time << " process.deal.time " << endtime;
 		}
 		this->RealNotify(msg,error);
 	};
 	IMessage* Request() const{return req;}
-	uint64_t StartTime() const {return start_time_.MicroSecond();}
-	uint64_t CreateTime() const {return create_time_.MicroSecond();}
-	uint64_t EndTime() const {return end_time_.MicroSecond();}
+	int64_t StartTime() const {return start_time_.MicroSecond();}
+	int64_t CreateTime() const {return create_time_.MicroSecond();}
+	int64_t EndTime() const {return end_time_.MicroSecond();}
 	void SetStart(){start_time_ = abb::Date::Now();}
 private:
 	void SetEnd(){

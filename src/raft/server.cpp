@@ -411,7 +411,7 @@ bool Server::Init(){
 		return true;
 	}
 	this->LoadSnapshot();
-	abb::net::IPAddr addr;
+	abb::net::SocketAddress addr;
 	if(! addr.SetByStringIgnoreIP(addr_) ){
 		return false;
 	}
@@ -1050,7 +1050,7 @@ bool Server::SaveSnapshot(){
 		if(!this->pending_snapshot_->Save()){
 			if(num++ >= 3) return false;
 		}else{
-			return true;
+			break;
 		}
 	}
 	

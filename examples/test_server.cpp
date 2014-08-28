@@ -175,7 +175,7 @@ int main(int argc,const char* argv[]){
 	abb::http::Server http_svr;
 	http_svr.Init(1,true);
 	http_svr.SetListener(&st);
-	abb::net::IPAddr addr;
+	abb::net::SocketAddress addr;
 	addr.SetV4(NULL,8083);
 	http_svr.Bind(addr,NULL);
 	http_svr.Start();
